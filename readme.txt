@@ -23,3 +23,16 @@ For HDHI_Admission_data run on AGE, GENDER and OUTCOME
 For Twitter dataset run on sentiment
 For aapl dataset run on % Change
 
+7. Varying (to be configured in the "run_consumer_readable.py"):
+Window sizes = 10, 20, 50, 100, 200, 500, 1000, 2000
+Block sizes = 5, 10, 25, 50, 100, 250, 500, 1000 (make sure block sizes are a factor of the window size you chose)
+Attributes = GENDER(2), OUTCOME(3), AGE(5)
+AAPL = % Change(5)
+output_tweets = sentiment(5)
+
+8. Fixed values (to be configured in the "run_plotter.py"):
+Window size = 2000 (all the block sizes can then be plotted)
+Block size = 5 (all the window sizes can then be plotted)
+Cardinality = 3 (for HDHI_Admission_data)
+              5 (for aapl_pct_change)
+              5 (for output_twitter)
