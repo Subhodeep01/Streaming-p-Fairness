@@ -15,6 +15,7 @@ print(clean)
 if is_discrete == 0:
     cleaned_df, summary = make_bins(clean, date_col, attr, max_bins=5, min_pct= 0.15)
     print("After binning we have: \n", summary.to_string(index=False))
+    summary.to_csv(f"cleaned_input_files/summary_{cleaned_df.columns[0]}.csv", index=False)
 else:
     df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
     cleaned=df.dropna(subset=date_col).reset_index(drop=True)
@@ -22,4 +23,4 @@ else:
     print(cleaned_df)
 
 cleaned_df.to_csv("cleaned_input_files/cleaned_df.csv", index=False)
-summary.to_csv(f"cleaned_input_files/summary_{cleaned_df.columns[0]}.csv", index=False)
+

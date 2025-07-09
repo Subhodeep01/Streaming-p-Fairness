@@ -1,2 +1,3 @@
-Window size,Block size,Cardinality,Avg preprocessing,Avg query processing,Preprocessing: Sketch Building time
-100,5,5,0.059758600000002104,0.029953599999977598,0.26080000000128223
+version https://git-lfs.github.com/spec/v1
+oid sha256:5e03d79bb15e8c85e1fc85d5db0e6666a1f390fafd99fb989ce1c7e7053c1b02
+size 180

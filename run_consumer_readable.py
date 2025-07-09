@@ -1,9 +1,9 @@
 import subprocess
 import time
 
-window_size = 1000
-block_size = 5
-topic_name = "hospital-raw-age-v3"
+window_size = 100
+block_size = 25
+topic_name = "hospital-raw-gender-v3"
 max_windows = 500
 
 command = [f'python consumer.py --window_size={window_size} --block_size={block_size} --topic_name={topic_name} --max_windows={max_windows}']

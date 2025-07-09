@@ -40,7 +40,10 @@ if __name__ == "__main__":
     read_window = None
     metrics = {"Window size":WINDOW_SIZE, "Block size":BLOCK_SIZE}
     df_temp = pd.read_csv("cleaned_input_files/cleaned_df.csv")
-    print(pd.read_csv(f"cleaned_input_files/summary_{df_temp.columns[0]}.csv"))
+    try:
+        print(pd.read_csv(f"cleaned_input_files/summary_{df_temp.columns[0]}.csv"))
+    except:
+        print("Discrete value, no binning info")
     position, fairness = position_finder(df_temp, fairness, BLOCK_SIZE)
 
     window_counter = 0
@@ -126,26 +129,30 @@ if __name__ == "__main__":
                 
                 # Process the current sliding window (every new message triggers this)
                 query_result, metric = process_window(message_buffer.copy())
-                print("Query Result: ", query_result)
+                # print("Query Result: ", query_result)
             
-            # if total_sum == 500:
-                # throughput += window_counter
-                # its += 1
-                # window_counter = 1
-                # total_sum = 0
-                # print("Throughput = ", throughput//its)
-                # metric["Throughput"] = throughput//its
+            print(total_sum)
+            if total_sum >= 1000:
+                throughput += window_counter
+                its += 1
+                window_counter = 1
+                total_sum = 0
+                print("Throughput = ", throughput//its)
+                metric["Throughput"] = throughput//its
                 
-            if window_counter == MAX_WINDOWS:
-                # print(total_sum)
+            if its == 2:
                 break
+            # if window_counter == MAX_WINDOWS:
+            #     # print(total_sum)
+            #     break
         
-        metric = pd.DataFrame(metric, index = [0])
-        print("Metrics: ", metric)
+        
 
     except KeyboardInterrupt:
         print("Stopping consumer…")
     finally:
+        metric = pd.DataFrame(metric, index = [0])
+        print("Metrics: ", metric)
         metric.to_csv(f"metrics/metric_{df_temp.columns[0]}{WINDOW_SIZE}{BLOCK_SIZE}.csv", index= False)
         consumer.close()
 
