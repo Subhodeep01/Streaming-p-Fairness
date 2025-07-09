@@ -1,8 +1,8 @@
 import pandas as pd
 from utils import position_finder, load_clean, make_bins
 
-csv_ip = input("Enter the name of the dataset to produce from (type exact with extension like .csv): ")
-CSV    = csv_ip
+csv_ip = input("Enter the name of the dataset to produce from (type exact without any extension like .csv): ")
+CSV    = "datasets/"+csv_ip+".csv"
 
 df = pd.read_csv(CSV)
 print(f"Here are the attributes for your given CSV {CSV}: \n", df.columns)
@@ -21,5 +21,5 @@ else:
     cleaned_df = clean[[attr]]
     print(cleaned_df)
 
-cleaned_df.to_csv("cleaned_df.csv", index=False)
-summary.to_csv(f"summary_{cleaned_df.columns[0]}.csv", index=False)
+cleaned_df.to_csv("cleaned_input_files/cleaned_df.csv", index=False)
+summary.to_csv(f"cleaned_input_files/summary_{cleaned_df.columns[0]}.csv", index=False)

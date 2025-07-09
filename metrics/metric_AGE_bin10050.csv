@@ -1,0 +1,2 @@
+Window size,Block size,Cardinality,Avg preprocessing,Avg query processing,Preprocessing: Sketch Building time
+100,50,5,0.05437839999994054,0.0072238000000552915,0.20659999999850243
