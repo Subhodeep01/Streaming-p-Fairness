@@ -47,7 +47,7 @@ if __name__ == "__main__":
 
             # Poll to handle delivery reports
             producer.poll(0)
-            time.sleep(SLEEP)
+            # time.sleep(SLEEP)
 
         # Wait for all messages to be delivered
         producer.flush()

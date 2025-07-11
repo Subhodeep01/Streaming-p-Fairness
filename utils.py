@@ -8,7 +8,7 @@ def position_finder(df: pd.Series, fairness, block_size):
     position = {unique[i]: i for i in range(len(unique))}
     if len(fairness) == 0:
         for i in range(len(unique)):
-            fairness[unique[i]] = float(input(f"Input the fairness constraint for {df.columns[0]} {unique[i]} (how many of this item you want in the stream) cannot exceed {block_size}: "))
+            fairness[unique[i]] = int(input(f"Input the fairness constraint for {df.columns[0]} {unique[i]} (how many of this item you want in the stream) cannot exceed {block_size}: "))
             if sum(fairness.values()) >= block_size:
                 print("Total fairness exceeding 100%. Updating the rest...")
                 diff = sum(fairness.values()) - block_size
@@ -29,10 +29,10 @@ def sketcher(df: pd.Series, sketch, position) -> dict:
     # print("Rec and position",rec,position)
     if len(sketch) == 0:
         for i in df_num:
-            # print(i)
             rec[position[i]] += 1
             sketch.append(tuple(rec))
         return None
+    # elif len(sketch) == window_size
     else:
         popped_ele = sketch.pop(0)
         # print("popped_ele",popped_ele)
@@ -59,6 +59,8 @@ def verify_sketch(sketch, position, block_size, fairness, popped_ele):
         else:
             block_start = sketch[i-1]
         block_end = sketch[i+block_size - 1]
+
+        
         for key, pos in position.items():
             diff = block_end[pos] - block_start[pos]
             if diff >= fairness[key]:

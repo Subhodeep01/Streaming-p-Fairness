@@ -53,17 +53,18 @@ if __name__ == "__main__":
     count = 0
     throughput = 0
     its = 0
+    fair_block_sum = 0
 
 
     def process_window(batch):
         global sketch, fairness, read_window, window_counter, metrics, position, fairness
-        global sketching_sum, processing_sum, total_sum, count
+        global sketching_sum, processing_sum, total_sum, count, fair_block_sum
         
         count += 1
 
         # t0 = time.perf_counter()
         if count == 1:
-            print("HERE")
+            # print("HERE")
             read_window = pd.DataFrame(batch)
         else:
             read_window = pd.concat([read_window, pd.DataFrame(batch[WINDOW_SIZE-1], index=[0])], ignore_index=True)
@@ -84,6 +85,7 @@ if __name__ == "__main__":
         sketching_sum += sketching_ms
         processing_sum += processing_ms
         total_sum += total_querying_ms
+        fair_block_sum += fair_block
         avg_sketching = sketching_sum / count
         avg_processing = processing_sum / count
         
@@ -97,6 +99,7 @@ if __name__ == "__main__":
         metrics["Cardinality"]=len(position.keys())
         metrics["Avg preprocessing"]=avg_sketching
         metrics["Avg query processing"]=avg_processing
+        metrics["Total Fair Blocks"] = fair_block_sum
         if count == 1:
             metrics["Preprocessing: Sketch Building time"] = sketching_ms
             
@@ -140,7 +143,7 @@ if __name__ == "__main__":
                 print("Throughput = ", throughput//its)
                 metric["Throughput"] = throughput//its
                 
-            if its == 2:
+            if its == 1:
                 break
             # if window_counter == MAX_WINDOWS:
             #     # print(total_sum)

@@ -2,19 +2,47 @@ import subprocess
 import time
 
 
-topic_name = "hospital-raw-gender-v3"
+topic_name = "hospital-raw-gender-v4"
 
 
-command = [f'python producer.py --topic_name={topic_name}']
+command = ['python', 'producer.py', '--topic_name',f'{topic_name}']
 
-production = subprocess.Popen(['cmd', '/c', command[0]], shell=True)
+production = subprocess.Popen(command, shell=True)
 
 production.wait()
 
-production2 = subprocess.Popen(['cmd', '/c', command[0]], shell=True)
+production2 = subprocess.Popen(command, shell=True)
 
 production2.wait()
 
-production3 = subprocess.Popen(['cmd', '/c', command[0]], shell=True)
+production3 = subprocess.Popen(command, shell=True)
 
 production3.wait()
+
+production4 = subprocess.Popen(command, shell=True)
+
+production4.wait()
+
+production5 = subprocess.Popen(command, shell=True)
+
+production5.wait()
+
+production = subprocess.Popen(command, shell=True)
+
+production.wait()
+
+production2 = subprocess.Popen(command, shell=True)
+
+production2.wait()
+
+production3 = subprocess.Popen(command, shell=True)
+
+production3.wait()
+
+production4 = subprocess.Popen(command, shell=True)
+
+production4.wait()
+
+production5 = subprocess.Popen(command, shell=True)
+
+production5.wait()

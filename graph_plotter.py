@@ -12,7 +12,7 @@ def plot_metrics(df, vary_col, fixed_cols, fixed_vals, title_suffix, file_path):
     x = subset[vary_col]
 
     plt.figure(figsize=(10, 6))
-    for metric in ['Avg preprocessing', 'Avg query processing', 'Preprocessing: Sketch Building time']:
+    for metric in ['Avg preprocessing', 'Avg query processing']:
         plt.plot(x, subset[metric], marker='o', label=metric)
 
     plt.xlabel(vary_col)
