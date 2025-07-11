@@ -1,13 +1,18 @@
 import subprocess
 import time
 
-window_size = 100
-block_size = 25
-topic_name = "hospital-raw-gender-v3"
+window_sizes = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000]
+# block_sizes = [5, 10, 25, 50, 100, 250, 500, 1000, 2500]
+block_sizes = [25, 250]
+topic_name = "hospital-raw-gender-v4"
 max_windows = 500
 
-command = [f'python consumer.py --window_size={window_size} --block_size={block_size} --topic_name={topic_name} --max_windows={max_windows}']
+for window_size in window_sizes:
+    for block_size in block_sizes:
+        if window_size <= block_size or window_size%block_size!=0:
+            continue
+        else:
 
-consumption = subprocess.Popen(['cmd', '/c', command[0]], shell=True)
+            command = ['python', 'consumer_readable.py', '--window_size',f'{window_size}', '--block_size', f'{block_size}', '--topic_name',f'{topic_name}', '--max_windows',f'{max_windows}']
 
-consumption.wait()
+            consumption = subprocess.run(command, shell=True)
