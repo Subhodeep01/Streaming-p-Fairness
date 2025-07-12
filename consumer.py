@@ -62,20 +62,23 @@ if __name__ == "__main__":
         
         count += 1
 
-        # t0 = time.perf_counter()
-        if count == 1:
-            # print("HERE")
-            read_window = pd.DataFrame(batch)
-        else:
-            read_window = pd.concat([read_window, pd.DataFrame(batch[WINDOW_SIZE-1], index=[0])], ignore_index=True)
+        read_window = pd.DataFrame(batch)
+        # sketch = []
+        
         attr = read_window.columns[0]
+        # print(read_window[attr].to_list())
+        effective_window = read_window[attr][-1:]
         t1 = time.perf_counter()
-        popped = sketcher(read_window[attr], sketch, position)
+        if len(sketch) == 0:
+            effective_window = read_window[attr]
+            popped = sketcher(effective_window, sketch, position)
+        else:
+            popped = sketcher(effective_window, sketch, position)
         t2 = time.perf_counter()
         query_result, fair_block = verify_sketch(sketch, position, BLOCK_SIZE, fairness, popped)
         t3 = time.perf_counter()
 
-        
+        # print(sketch)
         # window_update_ms = 0 if window_counter == 1 else (t1 - t0) * 1000
         sketching_ms = (t2 - t1) * 1000
         processing_ms = (t3 - t2) * 1000
@@ -91,7 +94,7 @@ if __name__ == "__main__":
         
         # print(f"✔ Processed sliding window {count}")
         # print(f" Avg preprocessing: {avg_sketching:.3f} ms")
-        # print(f" Avg query processing: {avg_processing:.3f} ms")
+        print(f" Total querying time: {total_querying_ms:.3f} ms")
         # print(f" Output: {query_result}")
 
         read_window.drop(index=read_window.index[0], axis=0, inplace=True)

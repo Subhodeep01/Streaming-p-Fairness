@@ -68,10 +68,16 @@ if __name__ == "__main__":
         
         count += 1
         read_window = pd.DataFrame(batch)
+        # sketch = []
         
         attr = read_window.columns[0]
+        effective_window = read_window[attr][-1:]
         t1 = time.perf_counter()
-        popped = sketcher(read_window[attr], sketch, position)
+        if len(sketch) == 0:
+            effective_window = read_window[attr]
+            popped = sketcher(effective_window, sketch, position)
+        else:
+            popped = sketcher(effective_window, sketch, position)
         t2 = time.perf_counter()
         query_result, fair_block = verify_sketch(sketch, position, BLOCK_SIZE, fairness, popped)
         t3 = time.perf_counter()         
@@ -89,7 +95,8 @@ if __name__ == "__main__":
         
         metrics["Avg preprocessing"]=avg_sketching
         metrics["Avg query processing"]=avg_processing
-        
+        # print("Sketch length: ", sketch)
+        # print("Original sketching and processing: ", sketching_ms, processing_ms)
         if count == 1:
             metrics["Preprocessing: Sketch Building time"] = sketching_ms
             
@@ -107,37 +114,45 @@ if __name__ == "__main__":
         total_querying_ms = 0
         fair_block_sum = 0
         fair_block_new_sum = 0
-        query_results = []
-
-        # Compute the query result and total fair blocks without applying the edit
+        
         for i in range(LANDMARK):
-            effective_window = read_window[attr][i+1:WINDOW_SIZE + i+1]
+            effective_window = read_window[attr][-1:]
             popped = sketcher(read_window[attr], sketch, position)
+
             query_result, fair_block = verify_sketch(sketch, position, BLOCK_SIZE, fairness, popped)
+
             fair_block_sum += fair_block
+            
 
         fair_blocks_ini += fair_block_sum
         t4 = time.perf_counter()
         sketch = []
+        sketching_ms =  0
+        processing_ms = 0
+        total_querying_ms = 0
         query_results = []
-        # print("Reached here safely", batch_landmarked)
+
         m, rem_counts, unique = max_rep_blocks(read_window[attr].to_list(), BLOCK_SIZE, WINDOW_SIZE, fairness)
-        # print("Did we reach here though?",m, rem_counts, unique)
+
         edited_stream = build_max_rep(m, rem_counts, unique, BLOCK_SIZE, fairness)
-        # print("Can we reach here?", edited_stream)
-        # input("Lets check!")
+
         read_window = pd.DataFrame(edited_stream, columns=[attr])
         buffer = read_window.to_dict(orient='records')
         t5 = time.perf_counter()
-        # print("Did we reach here though?", buffer)
+  
         swapping_time = (t5 - t4) * 1000
         processing_ms += (t5 - t4) * 1000  
         
         # Compute the fair blocks without applying the edit
         for i in range(LANDMARK+1):
-            effective_window = read_window[attr][i:WINDOW_SIZE + i]
+
+            effective_window = read_window[attr][-1:]
             t6 = time.perf_counter()
-            popped = sketcher(effective_window, sketch, position)
+            if len(sketch) == 0:
+                effective_window = read_window[attr][i:WINDOW_SIZE + i]
+                popped = sketcher(effective_window, sketch, position)
+            else:
+                popped = sketcher(effective_window, sketch, position)
             t7 = time.perf_counter()
             query_result, fair_block_new = verify_sketch(sketch, position, BLOCK_SIZE, fairness, popped)
             t8 = time.perf_counter()
@@ -148,19 +163,21 @@ if __name__ == "__main__":
             sketching_ms +=  (t7 - t6) * 1000
             processing_ms += (t8 - t7) * 1000 
             total_querying_ms += (t8 - t6) * 1000 
+            # print("Sketch length: ", sketch)
+            # print("Each iteration sketching_ms and processing_ms: ", sketching_ms, processing_ms)
 
         fair_blocks_swapped += fair_block_new_sum   
             
         swapping_sum += swapping_time
         sketching_sum += sketching_ms
         processing_sum += processing_ms
-        total_sum += total_querying_ms
+        total_sum += total_querying_ms + swapping_time
 
         avg_swapping = (swapping_sum / count)
         avg_sketching = sketching_sum / count
         avg_processing = processing_sum / count
             
-            
+        print(f" Total querying time: {total_querying_ms:.3f} ms")
         metrics["Avg swapping time"] = avg_swapping
         metrics["Avg preprocessing"]=avg_sketching
         metrics["Avg query processing"]=avg_processing
@@ -225,7 +242,7 @@ if __name__ == "__main__":
             metrics["Total fair blocks after swapping"] = fair_blocks_swapped
             metrics["Total windows covered"] = window_counter
             # print(message_buffer)
-            print(total_sum)
+            print(window_counter, total_sum)
             if total_sum >= 1000:
                 throughput += window_counter
                 its += 1

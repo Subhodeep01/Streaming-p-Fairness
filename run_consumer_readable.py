@@ -1,10 +1,12 @@
 import subprocess
 import time
 
-window_sizes = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000]
+# window_sizes = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000]
 # block_sizes = [5, 10, 25, 50, 100, 250, 500, 1000, 2500]
-block_sizes = [25, 250]
-topic_name = "hospital-raw-gender-v4"
+# block_sizes = [25, 250]
+window_sizes = [50]
+block_sizes = [5]
+topic_name = "hospital-raw-gender-f1"
 max_windows = 500
 
 for window_size in window_sizes:
@@ -13,6 +15,6 @@ for window_size in window_sizes:
             continue
         else:
 
-            command = ['python', 'consumer_readable.py', '--window_size',f'{window_size}', '--block_size', f'{block_size}', '--topic_name',f'{topic_name}', '--max_windows',f'{max_windows}']
+            command = ['python', 'consumer.py', '--window_size',f'{window_size}', '--block_size', f'{block_size}', '--topic_name',f'{topic_name}', '--max_windows',f'{max_windows}']
 
             consumption = subprocess.run(command, shell=True)

@@ -40,7 +40,8 @@ def sketcher(df: pd.Series, sketch, position) -> dict:
         # print(i)
         last = sketch[-1]
         rec[position[i]] += 1
-        rec = list(map(lambda x, y: x + y, last, rec))
+        rec = [x + y for x, y in zip(last, rec)]
+
         sketch.append(tuple(rec))
 
     return popped_ele

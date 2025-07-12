@@ -2,7 +2,7 @@ import subprocess
 import time
 
 
-topic_name = "hospital-raw-gender-v4"
+topic_name = "hospital-raw-gender-f1"
 
 
 command = ['python', 'producer.py', '--topic_name',f'{topic_name}']
