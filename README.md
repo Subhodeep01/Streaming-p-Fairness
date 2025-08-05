@@ -30,7 +30,7 @@ docker compose -f ./zk-single-kafka-single.yml up -d
 
 Before producing and consuming data:
 
-- Create a `datasets` directory and place all datasets there.  
+- Delete and rereate the `datasets` directory and place all datasets there.  
   📥 Download from: [Datasets](https://drive.google.com/drive/folders/1HZG-87E68jxIp5kVM9nrMapfxOJPcyO0?usp=sharing)
 - Create a `metrics` directory to store performance metrics.
 
