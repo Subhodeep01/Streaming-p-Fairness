@@ -100,4 +100,4 @@ python consumer_editable_performance.py --window_size <size> --block_size <size>
 
 ## 📄 Technical Report
 
-The tech report is included as a PDF in [Technical_Report.pdf](Technical_Report.pdf).
+The tech report is included as a PDF in [Technical_Report.pdf]([Technical_Report.pdf](https://github.com/Subhodeep01/Streaming-p-Fairness/blob/506c291b75cab64480343bb74e69f88904284be0/Techinical_Report.pdf)).
