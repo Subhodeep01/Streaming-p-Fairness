@@ -27,7 +27,7 @@ def unique_permutations(lst):
 
 def brute_force(input_col, fairness_criteria, window_size, block_size):
     # global fairness
-    unique = list(set(input_col))
+    unique = list(set(fairness_criteria.keys()))
     unique.sort()
     # position = {unique[i]: i for i in range(len(unique))}
     # fairness_criteria = {position[i]: int(fairness[i]*block_size) for i in unique}

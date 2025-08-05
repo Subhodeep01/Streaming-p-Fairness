@@ -1,19 +1,19 @@
 import pandas as pd
 from utils import load_clean, make_bins
 
-# csv_ip = input("Enter the name of the dataset to produce from (type exact without any extension like .csv): ")
-csv_ip = "HDHI_Admission_data"
+csv_ip = input("Enter the name of the dataset to produce from (type exact without any extension like .csv): ")
+# csv_ip = "HDHI_Admission_data"
 CSV    = "datasets/"+csv_ip+".csv"
 
 df = pd.read_csv(CSV)
 print(f"Here are the attributes for your given CSV {CSV}: \n", df.columns)
-# date_col = input("Please write the appropiate date column name for the given dataset (e.g. DATE, D.O.A., etc): ")
-date_col = "D.O.A"
-# attr = input("Please write the name of the attribute you want to stream and monitor: ")
-attr = "GENDER"
+date_col = input("Please write the appropiate date column name for the given dataset (e.g. DATE, D.O.A, etc): ")
+# date_col = "D.O.A"
+attr = input("Please write the name of the attribute you want to stream and monitor: ")
+# attr = "AGE"
 print("Values for the selected attribute: ", df[attr])
-# is_discrete = int(input("Is the selected attribute discrete? (0 == No | 1 == Yes)"))
-is_discrete = 1
+is_discrete = int(input("Is the selected attribute discrete? (0 == No | 1 == Yes)"))
+# is_discrete = 0
 clean = load_clean(CSV, attr, date_col)
 print(clean)
 if is_discrete == 0:

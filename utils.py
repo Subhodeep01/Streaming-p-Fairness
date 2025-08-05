@@ -1,6 +1,7 @@
 import pandas as pd
 import math
 import numpy as np
+from collections import deque
 
 def position_finder(df: pd.Series, fairness, block_size):
     unique = df.iloc[:, 0].unique().tolist()
@@ -21,7 +22,7 @@ def position_finder(df: pd.Series, fairness, block_size):
 
 def sketcher(df: pd.Series, sketch, position) -> dict:
     """
-    Receives a DF with exactly 10 rows and a single attribute column.
+    Builds or updates sketch as required
     """
     df_num = df
     # print("DF Num",df_num)
@@ -46,6 +47,54 @@ def sketcher(df: pd.Series, sketch, position) -> dict:
 
     return popped_ele
 
+def add_element(sketch_bwd, ele):
+    sketch_bwd = deque(sketch_bwd)  # using deque and appending makes the time complexity O(1)
+    sketch_bwd.appendleft(ele)
+    sketch_bwd = list(sketch_bwd)
+
+
+def bwd_sketcher(df: pd.Series, position) -> dict:
+    """
+    Builds backward sketch
+    """
+    sketch_bwd = deque([])
+    df_num = df
+    # print(sketch_bwd)
+    rec = [0]*len(position)
+    for i in df_num[::-1]:
+        rec[position[i]] += 1
+        sketch_bwd.appendleft(tuple(rec))
+    sketch_bwd = list(sketch_bwd)
+    return sketch_bwd
+
+    
+def verify_bwd_sketch(sketch, position, block_size, fairness):
+    rec = [0]*len(position)
+    # stream_data = {}
+    stream_data = []
+    fair_block = 0
+    for i in range(0, len(sketch), block_size):
+        block_num = i//block_size + 1
+        fairs = 0
+        block_start = sketch[i]
+        if i + block_size < len(sketch):
+            block_end = sketch[i+block_size]
+        else:
+            block_end = rec
+        
+        for key, pos in position.items():
+            diff = block_end[pos] - block_start[pos]
+            if diff >= fairness[key]:
+                fairs += 1
+                
+        if fairs == len(position.keys()):
+            fair_block += 1
+            stream_data.append(f"Block {block_num} is p-fair ✅")
+        else:
+            stream_data.append(f"Block {block_num} is not p-fair ❌")
+    
+    return stream_data, fair_block
+
 def verify_sketch(sketch, position, block_size, fairness, popped_ele):
     rec = [0]*len(position)
     # stream_data = {}
@@ -69,9 +118,14 @@ def verify_sketch(sketch, position, block_size, fairness, popped_ele):
                 
         if fairs == len(position.keys()):
             fair_block += 1
-            stream_data.append(f"Block {block_num} is p-fair ✅")
-        else:
-            stream_data.append(f"Block {block_num} is not p-fair ❌")
+        #     print(f"Block {block_num} is p-fair ✅")
+        # else:
+        #     print(f"Block {block_num} is not p-fair ❌")
+    # print(fair_block, len(sketch)//block_size)
+    if fair_block == len(sketch)//block_size:
+        stream_data.append(f"Window is p-fair ✅")
+    else:
+        stream_data.append(f"Window is not p-fair ❌")
     
     return stream_data, fair_block
 

@@ -1,38 +1,58 @@
-1. Inside the current directory, create a python 3.9 (or higher) virtual environment. Then run the following line in the terminal.
+How to get started:
 
-$ pip install confluent-kafka pandas numpy matplotlib
+1. Git clone the repository first. It is highly suggested to open the directory in VScode.
+Inside the current directory, create a python 3.9 (or higher) virtual environment. Then run the following line in the terminal(do not copy '$').
 
-2. Start the kafka setup (do not copy '$'): 
+$ pip install confluent-kafka pandas numpy matplotlib more_itertools
+
+2. Install docker desktop in your system and keep it running in the background. Start the kafka setup by running the following line in terminal(do not copy '$'): 
 $ docker compose -f .\zk-single-kafka-single.yml up -d
 
-3. Make the required changes in the configuration files (starting with "run") for producer and consumer
-!!! CHECK THE TOPIC EVERYTIME YOU CHANGE THE ATTRIBUTE (FOR "AGE" MAKE THE TOPIC NAME HAVE AGE, FOR "GENDER" MAKE IT HAVE "GENDER")
-    FOR BOTH THE CONSUMER AND PRODUCER IN THEIR CONFIG files
-!! change the window size, block size (and max_windows if needed in the config file for the consumer)
+3. Once the kafka container is installed and running inside a docker container, we can now start producing and consuming data streams.
 
-4. Once you have enough metrics collected for a particular dataset, copy the metrics from the different files generated into
-    one metric file (look at "metric_HDHI.csv" for instance) and then run the graph_plotter config file "run_plotter.py"
-    You can mention the fixed window size, block size and cardinality (like Gender's cardinality is2, Age's cardinality is 5)
-    and the name of the metric file where you brought all the data together from other metric files ("metric_HDHI.csv" for my
-    instance)
+4. Before moving to production and consumption it is essential to do the following things.
+    a. Create a directory "datasets" under the project directory and place all the datasets inside the directory. Datasets can be downloaded from {link}.
+    b. Create a directory "metrics". All the performance metrics of the session will be stored there for a particular set of parameters and a particular dataset.
+    
+4. Run the following command:
+$ python run_producer.py 
+[!! If an error is thrown like missing module or something else when using the above command (usually the case when not using VScode), run this directly as a failsafe:
+$ python producer.py --topic_name #some_topic_name
+Replace #some_topic_name with the topic name we would like.]
 
-5. Graphs will be generated varying window_size, block_size and cardinality in the figures folder.
+We will be prompted for the topic name (the place where the producer publishes the data items). We need to make sure to change it everytime we decide to monitor another dataset or a new attribute from the same dataset.
+Then proceed with the following inputs as prompted.
+(Make sure you provide the correct value 0/1 in is_discrete. 1 means YES, 0 means NO.)
+NOTE:
+!! If any mistake is comitted while inputting the data after topic name has been given, it is best to terminate as soon as we realize it.
+!! If the production has already started, it is best to run the command again and this time produce correctly in a new topic.
 
-6. Repeat this for all the datasets. 
-For HDHI_Admission_data run on AGE, GENDER and OUTCOME
-For Twitter dataset run on sentiment
-For aapl dataset run on % Change
 
-7. Varying (to be configured in the "run_consumer_readable.py"):
-Window sizes = 10, 20, 50, 100, 200, 500, 1000, 2000, 5000
-Block sizes = 5, 10, 25, 50, 100, 250, 500, 1000, 2500 (make sure block sizes are a factor of the window size you chose)
-Attributes = GENDER(2), OUTCOME(3), AGE(5)
-AAPL = % Change(5)
-output_tweets = sentiment(5)
+6. Next, run the following command to run the read-only version of our framework:
+$ python run_consumer_readable.py 
+[!! If an error is thrown like missing module or something else when using the above command (usually the case when not using VScode), run this directly as a failsafe:
+$ python consumer.py --window_size #window_size --block_size #block_size --topic_name #some_topic_name --max_windows #max_windows
+Replace #some_topic_name with the topic name we would like and input the window size, block size and max windows to monitor in place of #window_size, #block_size, #max_windows, respectively]
 
-8. Fixed values (to be configured in the "run_plotter.py"):
-Window size = 2000 (all the block sizes can then be plotted)
-Block size = 5 (all the window sizes can then be plotted)
-Cardinality = 2,5,3 (for HDHI_Admission_data)
-              5 (for aapl_pct_change)
-              5 (for output_twitter)
+Proceed with the following inputs as prompted.
+!!! MAKE SURE TO KEEP THE TOPIC NAME SAME AS IN THE PRODUCER 
+!! Make sure block size is a factor of window size.
+!! When prompted for fairness, provide the counts of the given values and not percentage or fraction. For example when prompted to enter the fairness of F in a block of size 20, provide the count 10. And for M provide 10 as well.
+!!! Make sure the counts provided add up to block size. Also make sure NONE of the values have a 0 count otherwise the code will crash.
+The results will be printed in terminal and performance metrics for the session will be stored in the metrics directory.
+
+
+7. Now, run the following command to run the reorder version of our framework:
+$ python run_consumer_editable.py 
+[!! If an error is thrown like missing module or something else when using the above command (usually the case when not using VScode), run this directly as a failsafe:
+$ python consumer_editable_performance.py --window_size #window_size --block_size #block_size --topic_name #some_topic_name --max_windows #max_windows --landmark #landmark --brt_force False --backward False
+Replace #some_topic_name with the topic name we would like and input the window size, block size, max windows and landmark number to monitor in place of #window_size, #block_size, #max_windows, #landmark respectively]
+
+Proceed with the following inputs as prompted.
+!!! MAKE SURE TO KEEP THE TOPIC NAME SAME AS IN THE PRODUCER 
+!! Make sure block size is a factor of window size+landmark and landmark does not exceed window size.
+!! When prompted for fairness, provide the counts of the given values and not percentage or fraction. For example when prompted to enter the fairness of F in a block of size 20, provide the count 10. And for M provide 10 as well.
+!!! Make sure the counts provided add up to block size. Also make sure NONE of the values have a 0 count otherwise the code will crash.
+The results will be printed in terminal and performance metrics for the session will be stored in the metrics directory.
+
+
