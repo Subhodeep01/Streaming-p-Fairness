@@ -8,7 +8,7 @@
 git clone <repo_url>
 ```
 
-> 💡 It is highly recommended to open the directory in **VSCode**.
+> 💡 It is highly recommended to open the directory in **VSCode**. The code was built on Windows 11 OS. Should be compatible with MacOS but Windows OS is recommended.
 
 ### 2. Set Up Python Environment
 
