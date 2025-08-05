@@ -95,3 +95,9 @@ python consumer_editable_performance.py --window_size <size> --block_size <size>
 - ✅ Use **counts** for fairness (e.g., 10 for F and 10 for M).
 - ❗ Counts **must sum to block size** and **none should be zero**.
 - 📈 Results will be printed and performance metrics for the session will be stored in `metrics/`.
+
+---
+
+## 📄 Technical Report
+
+The tech report is included as a PDF in [Technical_Report.pdf](Technical_Report.pdf).
