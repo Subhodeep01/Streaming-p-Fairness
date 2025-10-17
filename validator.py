@@ -1,5 +1,6 @@
 from multi_proc_editable import max_rep_blocks, build_max_rep
 from brute_forcer import brute_force
+from utils import position_finder
 import time
 import pandas as pd
 # import user_inputs
@@ -10,7 +11,7 @@ BLOCK_SIZE = 5
 WINDOW_SIZE = 10
 LANDMARK = 5
 # fairness = {0: 2, 1: 2, 2:1}
-fairness = {"DAMA":2, "F":2}
+position, fairness = position_finder(df, {}, BLOCK_SIZE)
 total_fair_blocks_sum = 0
 brute_block_sum = 0
 brute_blocks = {"window size": WINDOW_SIZE, "block size": BLOCK_SIZE, "landmark":LANDMARK, "Cardinality":len(fairness.keys())}
@@ -53,7 +54,7 @@ def validate(output:list):
         return total_fair_blocks
 
 while(i <= 10):
-    input_col = df["GENDER"][i:i+WINDOW_SIZE+LANDMARK].to_list()
+    input_col = df["AGE_bin"][i:i+WINDOW_SIZE+LANDMARK].to_list()
     # input_col = ['M', 'M', 'M', 'F', 'F', 'M', 'F', 'M', 'F', 'M', 'M', 'M']
     # input_col = [0,1,1,0,0,2,2,2,2,0,0,0]
     # print(input_col)

@@ -3,7 +3,7 @@ from collections import Counter
 from more_itertools import distinct_permutations
 # input = [1,0,2,1, 0,0,2,2, 0,1,0,1]
 
-# fairness = [0.25, 0.5, 0.25]
+# fairness = {0: 2, 1:1, 2: 1}
 # block_size = 4
 # window_size = 8
 
@@ -25,7 +25,7 @@ def unique_permutations(lst):
 
     yield from backtrack([])
 
-def brute_force(input_col, fairness_criteria, window_size, block_size):
+def brute_force(input_col, fairness_criteria, window_size, block_size, slide):
     # global fairness
     unique = list(set(fairness_criteria.keys()))
     unique.sort()
@@ -35,8 +35,9 @@ def brute_force(input_col, fairness_criteria, window_size, block_size):
     max_fair_window = 0
     max_fair_blocks = 0
     ideal_stream = None
+    # print(input_col)
     gen = distinct_permutations(input_col)
-
+    # print(gen)
     # Print first 5 lazy permutations
     for i, perm in enumerate(gen):
         # print(perm)
@@ -44,43 +45,42 @@ def brute_force(input_col, fairness_criteria, window_size, block_size):
         fair_window = 0
         total_fair_blocks = 0
         current = 0
-        already_visited = []
+        already_visited = {}
         while current+window_size <= len(perm):
             fair_block = 0
             # print(current, current+window_size, len(perm))
             for block in range(current, current+window_size, block_size):    
                 # print(perm[block:block+block_size])
                 if (block,block+block_size) in already_visited:
-                    fair_block += 1
+                    fair_block += already_visited[(block,block+block_size)]
                     continue
-                already_visited.append((block,block+block_size))
+                # already_visited.append((block,block+block_size))
                 count_dict = {}
                 for i in unique:
                     count_dict[i] = perm[block:block+block_size].count(i)
-                # count_zer = perm[block:block+block_size].count(0)
-                # count_one = perm[block:block+block_size].count(1)
-                # print(count_one, count_zer, x, y)
-                    
-                # if count_zer >= x and count_one >= y:
-                
                 flag = 0
                 for i in unique:
                     if count_dict[i] >= fairness_criteria[i]:
                         flag += 1
+                        
+                # print(count_dict)
                 if flag == len(unique):
-                    fair_block += 1
-                    total_fair_blocks += 1
-            # print(total_fair_blocks)
+                        fair_block += 1
+                        total_fair_blocks += 1
+                        already_visited[(block,block+block_size)] = 1
+                else: already_visited[(block,block+block_size)] = 0
+                        
             if fair_block == int(window_size//block_size): fair_window += 1
+            current += slide
+        # print(already_visited)
             
-            current += 1
         
         if max_fair_window <= fair_window:
             max_fair_window = fair_window
             if max_fair_blocks < total_fair_blocks:
                 max_fair_blocks = total_fair_blocks
                 ideal_stream = perm
-                # print(max_fair_window, max_fair_blocks, ideal_stream)
+                print(max_fair_window, max_fair_blocks, ideal_stream)
                 
         
         
@@ -90,5 +90,5 @@ def brute_force(input_col, fairness_criteria, window_size, block_size):
 
 
 
-# max_fair_blocks, max_fair_window, ideal_stream = brute_force(input, None, window_size, block_size)
+# max_fair_blocks, max_fair_window, ideal_stream = brute_force(input, fairness, window_size, block_size, 4)
 # print(max_fair_blocks, max_fair_window, ideal_stream)
