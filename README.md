@@ -31,7 +31,7 @@ docker compose -f ./zk-single-kafka-single.yml up -d
 Before producing and consuming data:
 
 - Delete and rereate the `datasets` directory and place all datasets there.  
-  📥 Download from: [Datasets](https://drive.google.com/drive/folders/1HZG-87E68jxIp5kVM9nrMapfxOJPcyO0?usp=sharing)
+  📥 Download from: [Datasets](https://limewire.com/d/bc88v#wIWcyT9EMx)
 - Create a `metrics` directory to store performance metrics.
 
 ---
@@ -100,4 +100,4 @@ python consumer_editable_performance.py --window_size <size> --block_size <size>
 
 ## 📄 Technical Report
 
-The tech report is included as a PDF in [Technical_Report.pdf](Technical_Report.pdf).
+Additional information about algorithms, proofs and experiments are available in ([Technical_Report.pdf](https://github.com/Subhodeep01/Streaming-p-Fairness/blob/506c291b75cab64480343bb74e69f88904284be0/Techinical_Report.pdf)).
