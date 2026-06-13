@@ -52,6 +52,7 @@ class ConsumerConfig(BaseModel):
     block_size: int
     fairness: Dict[str, int]   # JSON keys are strings: {"0": 3, "1": 2, ...}
     max_windows: int = 200
+    delay_ms: int = 0           # artificial pause between windows for demo pacing
 
 
 class ProduceConfig(BaseModel):
@@ -208,6 +209,9 @@ def _run_consumer(config: ConsumerConfig):
 
             is_fair = bool(query_result and "✅" in query_result[0])
 
+            # Include the current window's attribute values so the UI can render tiles
+            window_items = [str(row.get(col, "")) for row in message_buffer]
+
             _metrics_queue.put({
                 "type": "window_update",
                 "window_number": window_counter,
@@ -216,7 +220,13 @@ def _run_consumer(config: ConsumerConfig):
                 "preprocessing_ms": round(sketching_ms, 4),
                 "query_ms": round(processing_ms, 4),
                 "metrics": metrics,
+                "window_items": window_items,
+                "block_size": config.block_size,
+                "attribute": col,
             })
+
+            if config.delay_ms > 0:
+                time.sleep(config.delay_ms / 1000.0)
 
             if window_counter >= config.max_windows:
                 break
