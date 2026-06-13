@@ -13,7 +13,8 @@ import sys
 import threading
 import time
 import tracemalloc
-from typing import Dict, List, Optional
+import socket
+from typing import Dict, List
 
 import numpy as np
 import pandas as pd
@@ -41,6 +42,7 @@ _active_ws: List[WebSocket] = []
 _metrics_queue: queue.Queue = queue.Queue()
 _stop_event = threading.Event()
 _is_running = False
+_is_producing = False
 _current_metrics: dict = {}
 
 
@@ -50,6 +52,10 @@ class ConsumerConfig(BaseModel):
     block_size: int
     fairness: Dict[str, int]   # JSON keys are strings: {"0": 3, "1": 2, ...}
     max_windows: int = 200
+
+
+class ProduceConfig(BaseModel):
+    topic_name: str
 
 
 # ── Broadcast helpers ─────────────────────────────────────────────────────────
@@ -64,8 +70,8 @@ async def _broadcast(msg: dict):
         _active_ws.remove(ws)
 
 
-async def _drain_queue():
-    """Async task: pull updates from the consumer thread and push to all WebSocket clients."""
+async def _drain_forever():
+    """Always-on queue drainer started at app startup; outlives individual runs."""
     global _is_running, _current_metrics
     while True:
         try:
@@ -81,7 +87,11 @@ async def _drain_queue():
 
         if msg.get("type") in ("done", "error"):
             _is_running = False
-            break
+
+
+@app.on_event("startup")
+async def _startup():
+    asyncio.create_task(_drain_forever())
 
 
 # ── Consumer thread (blocking) ────────────────────────────────────────────────
@@ -249,7 +259,6 @@ async def start_consumer(config: ConsumerConfig):
     _is_running = True
     t = threading.Thread(target=_run_consumer, args=(config,), daemon=True)
     t.start()
-    asyncio.create_task(_drain_queue())
     return {"status": "started"}
 
 
@@ -285,6 +294,62 @@ async def get_attributes():
         }
     except FileNotFoundError:
         return {"error": "Run user_inputs.py first.", "column": "", "unique_values": [], "summary": []}
+
+
+# ── Producer thread + endpoint ────────────────────────────────────────────────
+def _run_producer(topic_name: str, loop: asyncio.AbstractEventLoop):
+    global _is_producing
+    try:
+        from confluent_kafka import Producer
+
+        csv_path = os.path.join(_ROOT, "cleaned_input_files", "cleaned_df.csv")
+        df = pd.read_csv(csv_path)
+        total = len(df)
+
+        conf = {"bootstrap.servers": "localhost:9092", "client.id": socket.gethostname()}
+        producer = Producer(conf)
+
+        def _delivery(err, msg):
+            pass  # errors surface in flush
+
+        for _, row in df.iterrows():
+            producer.produce(
+                topic=topic_name,
+                key=b"stream",
+                value=row.to_json().encode(),
+                callback=_delivery,
+            )
+            producer.poll(0)
+
+        producer.flush()
+        asyncio.run_coroutine_threadsafe(
+            _broadcast({"type": "produce_done", "published": total, "topic": topic_name}),
+            loop,
+        ).result()
+    except Exception as exc:
+        asyncio.run_coroutine_threadsafe(
+            _broadcast({"type": "produce_error", "message": str(exc)}),
+            loop,
+        ).result()
+    finally:
+        _is_producing = False
+
+
+@app.post("/api/produce")
+async def produce_data(config: ProduceConfig):
+    global _is_producing
+    if _is_producing:
+        return {"status": "already_producing"}
+    _is_producing = True
+    loop = asyncio.get_event_loop()
+    t = threading.Thread(target=_run_producer, args=(config.topic_name, loop), daemon=True)
+    t.start()
+    return {"status": "started"}
+
+
+@app.get("/api/produce/status")
+async def produce_status():
+    return {"producing": _is_producing}
 
 
 # ── WebSocket endpoint ────────────────────────────────────────────────────────
