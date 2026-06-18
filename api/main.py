@@ -22,7 +22,6 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# Resolve project root so utils can be imported regardless of cwd
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 from utils import sketcher, verify_sketch
@@ -37,6 +36,61 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── Dataset configs ───────────────────────────────────────────────────────────
+
+DATASET_CONFIGS = {
+    "Hospital Admissions Data": {
+        "csv": "datasets/HDHI_Admission_data.csv",
+        "topic": "hospital-stream",
+        "attributes": [
+            {"label": "Gender", "column": "GENDER"},
+            {"label": "Hospitalization Outcome", "column": "OUTCOME"},
+            {"label": "Primary Diagnosis", "column": "PRIMARY_DIAGNOSIS"},
+        ],
+    },
+    "Stocks": {
+        "csv": "datasets/AAPL_pct_change_binned.csv",
+        "topic": "stock-stream",
+        "attributes": [
+            {"label": "Price Change", "column": "PRICE_CHANGE_BIN"},
+            {"label": "Volume", "column": "VOLUME_BIN"},
+        ],
+    },
+}
+
+
+def _preprocess_hospital(df: pd.DataFrame) -> pd.DataFrame:
+    out = pd.DataFrame()
+    out["GENDER"] = df["GENDER"].astype(str).str.strip()
+    outcome_map = {"DISCHARGE": "discharged", "EXPIRY": "expired", "DAMA": "dama"}
+    out["OUTCOME"] = df["OUTCOME"].astype(str).str.strip().map(outcome_map).fillna("discharged")
+
+    def get_diagnosis(row):
+        if row.get("ACS", 0) == 1:
+            return "acs"
+        if row.get("HEART FAILURE", 0) == 1:
+            return "heart-failure"
+        if row.get("ANAEMIA", 0) == 1 or row.get("SEVERE ANAEMIA", 0) == 1:
+            return "anaemia"
+        return "acs"
+
+    out["PRIMARY_DIAGNOSIS"] = df.apply(get_diagnosis, axis=1)
+    return out
+
+
+def _preprocess_stocks(df: pd.DataFrame) -> pd.DataFrame:
+    out = pd.DataFrame()
+    out["PRICE_CHANGE_BIN"] = df["bins"].astype(str)
+    volume_bins = pd.qcut(df["Volume"], q=3, labels=["low", "medium", "high"], duplicates="drop")
+    out["VOLUME_BIN"] = volume_bins.astype(str)
+    return out
+
+
+DATASET_PREPROCESSORS = {
+    "Hospital Admissions Data": _preprocess_hospital,
+    "Stocks": _preprocess_stocks,
+}
+
 # ── Shared state ──────────────────────────────────────────────────────────────
 _active_ws: List[WebSocket] = []
 _metrics_queue: queue.Queue = queue.Queue()
@@ -50,13 +104,14 @@ class ConsumerConfig(BaseModel):
     topic_name: str
     window_size: int
     block_size: int
-    fairness: Dict[str, int]   # JSON keys are strings: {"0": 3, "1": 2, ...}
-    max_windows: int = 200
-    delay_ms: int = 0           # artificial pause between windows for demo pacing
+    fairness: Dict[str, int]
+    attribute_column: str = "GENDER"
+    max_windows: int = 50
+    delay_ms: int = 0
 
 
 class ProduceConfig(BaseModel):
-    topic_name: str
+    dataset_name: str
 
 
 # ── Broadcast helpers ─────────────────────────────────────────────────────────
@@ -72,7 +127,6 @@ async def _broadcast(msg: dict):
 
 
 async def _drain_forever():
-    """Always-on queue drainer started at app startup; outlives individual runs."""
     global _is_running, _current_metrics
     while True:
         try:
@@ -95,21 +149,17 @@ async def _startup():
     asyncio.create_task(_drain_forever())
 
 
-# ── Consumer thread (blocking) ────────────────────────────────────────────────
+# ── Consumer thread ───────────────────────────────────────────────────────────
 def _run_consumer(config: ConsumerConfig):
-    """Runs entirely in a daemon thread; communicates back via _metrics_queue."""
     try:
         from confluent_kafka import Consumer as KafkaConsumer
 
-        csv_path = os.path.join(_ROOT, "cleaned_input_files", "cleaned_df.csv")
-        df_temp = pd.read_csv(csv_path)
-        col = df_temp.columns[0]
-        unique_vals = sorted(df_temp[col].unique().tolist())
+        col = config.attribute_column
+        unique_vals = sorted(config.fairness.keys())
         position = {v: i for i, v in enumerate(unique_vals)}
 
-        # Cast fairness keys to match actual data types (JSON keys are always strings)
-        sample = unique_vals[0]
         typed_fairness: dict = {}
+        sample = unique_vals[0] if unique_vals else "F"
         for k, v in config.fairness.items():
             try:
                 if isinstance(sample, (int, np.integer)):
@@ -123,7 +173,7 @@ def _run_consumer(config: ConsumerConfig):
 
         kafka_conf = {
             "bootstrap.servers": "localhost:9092",
-            "group.id": "ui-fairness-consumer",
+            "group.id": f"ui-fairness-{col}",
             "auto.offset.reset": "earliest",
         }
         consumer = KafkaConsumer(kafka_conf)
@@ -150,8 +200,10 @@ def _run_consumer(config: ConsumerConfig):
                 _metrics_queue.put({"type": "error", "message": str(msg.error())})
                 break
 
-            value = json.loads(msg.value().decode())
-            message_buffer.append(value)
+            row = json.loads(msg.value().decode())
+            attr_value = str(row.get(col, ""))
+            message_buffer.append({col: attr_value})
+
             if len(message_buffer) > config.window_size:
                 message_buffer.pop(0)
             if len(message_buffer) < config.window_size:
@@ -160,25 +212,22 @@ def _run_consumer(config: ConsumerConfig):
             window_counter += 1
             count += 1
             read_window = pd.DataFrame(message_buffer)
-            attr = read_window.columns[0]
 
-            # ── Sketch update ──────────────────────────────────────────────
             tracemalloc.start()
             t1 = time.perf_counter()
             tracemalloc.reset_peak()
 
             if len(sketch) == 0:
-                popped = sketcher(read_window[attr], sketch, position)
+                popped = sketcher(read_window[col], sketch, position)
                 t2 = time.perf_counter()
                 sketch_bld_latency.append((t2 - t1) * 1000)
             else:
-                popped = sketcher(read_window[attr][-1:], sketch, position)
+                popped = sketcher(read_window[col].iloc[-1:], sketch, position)
                 t2 = time.perf_counter()
                 sketch_upd_latency.append((t2 - t1) * 1000)
 
             sketching_ms = (t2 - t1) * 1000
 
-            # ── p-Fairness query ───────────────────────────────────────────
             t3 = time.perf_counter()
             tracemalloc.reset_peak()
             query_result, fair_block = verify_sketch(
@@ -209,8 +258,7 @@ def _run_consumer(config: ConsumerConfig):
 
             is_fair = bool(query_result and "✅" in query_result[0])
 
-            # Include the current window's attribute values so the UI can render tiles
-            window_items = [str(row.get(col, "")) for row in message_buffer]
+            window_items = [row[col] for row in message_buffer]
 
             _metrics_queue.put({
                 "type": "window_update",
@@ -233,17 +281,11 @@ def _run_consumer(config: ConsumerConfig):
 
         summary: dict = {}
         if process_latency:
-            summary["Processing tail latency (p90 ms)"] = round(
-                float(np.percentile(process_latency, 90)), 4
-            )
+            summary["Processing tail latency (p90 ms)"] = round(float(np.percentile(process_latency, 90)), 4)
         if sketch_bld_latency:
-            summary["Sketch build latency (p90 ms)"] = round(
-                float(np.percentile(sketch_bld_latency, 90)), 4
-            )
+            summary["Sketch build latency (p90 ms)"] = round(float(np.percentile(sketch_bld_latency, 90)), 4)
         if sketch_upd_latency:
-            summary["Sketch update latency (p90 ms)"] = round(
-                float(np.percentile(sketch_upd_latency, 90)), 4
-            )
+            summary["Sketch update latency (p90 ms)"] = round(float(np.percentile(sketch_upd_latency, 90)), 4)
 
         _metrics_queue.put({"type": "done", "summary": summary})
         consumer.close()
@@ -253,6 +295,35 @@ def _run_consumer(config: ConsumerConfig):
 
 
 # ── REST endpoints ────────────────────────────────────────────────────────────
+@app.get("/api/datasets")
+async def get_datasets():
+    result = []
+    for name, cfg in DATASET_CONFIGS.items():
+        csv_path = os.path.join(_ROOT, cfg["csv"])
+        try:
+            df = pd.read_csv(csv_path)
+            preprocessor = DATASET_PREPROCESSORS.get(name)
+            if preprocessor:
+                df = preprocessor(df)
+
+            attrs = []
+            for attr in cfg["attributes"]:
+                col = attr["column"]
+                if col in df.columns:
+                    unique_vals = sorted(df[col].dropna().unique().tolist())
+                    attrs.append({
+                        "label": attr["label"],
+                        "column": col,
+                        "unique_values": [str(v) for v in unique_vals],
+                    })
+
+            result.append({"name": name, "topic": cfg["topic"], "attributes": attrs})
+        except Exception as e:
+            result.append({"name": name, "topic": cfg["topic"], "attributes": [], "error": str(e)})
+
+    return result
+
+
 @app.post("/api/start")
 async def start_consumer(config: ConsumerConfig):
     global _is_running
@@ -285,49 +356,38 @@ async def get_status():
     return {"running": _is_running, "metrics": _current_metrics}
 
 
-@app.get("/api/attributes")
-async def get_attributes():
-    try:
-        df = pd.read_csv(os.path.join(_ROOT, "cleaned_input_files", "cleaned_df.csv"))
-        col = df.columns[0]
-        unique_vals = sorted(df[col].unique().tolist())
-        try:
-            summary = pd.read_csv(
-                os.path.join(_ROOT, "cleaned_input_files", f"summary_{col}.csv")
-            ).to_dict(orient="records")
-        except FileNotFoundError:
-            summary = []
-        return {
-            "column": col,
-            "unique_values": [str(v) for v in unique_vals],
-            "summary": summary,
-        }
-    except FileNotFoundError:
-        return {"error": "Run user_inputs.py first.", "column": "", "unique_values": [], "summary": []}
-
-
 # ── Producer thread + endpoint ────────────────────────────────────────────────
-def _run_producer(topic_name: str, loop: asyncio.AbstractEventLoop):
+def _run_producer(dataset_name: str, loop: asyncio.AbstractEventLoop):
     global _is_producing
     try:
         from confluent_kafka import Producer
 
-        csv_path = os.path.join(_ROOT, "cleaned_input_files", "cleaned_df.csv")
+        cfg = DATASET_CONFIGS.get(dataset_name)
+        if not cfg:
+            asyncio.run_coroutine_threadsafe(
+                _broadcast({"type": "produce_error", "message": f"Unknown dataset: {dataset_name}"}),
+                loop,
+            ).result()
+            return
+
+        csv_path = os.path.join(_ROOT, cfg["csv"])
         df = pd.read_csv(csv_path)
+
+        preprocessor = DATASET_PREPROCESSORS.get(dataset_name)
+        if preprocessor:
+            df = preprocessor(df)
+
+        topic_name = cfg["topic"]
         total = len(df)
 
         conf = {"bootstrap.servers": "localhost:9092", "client.id": socket.gethostname()}
         producer = Producer(conf)
-
-        def _delivery(err, msg):
-            pass  # errors surface in flush
 
         for _, row in df.iterrows():
             producer.produce(
                 topic=topic_name,
                 key=b"stream",
                 value=row.to_json().encode(),
-                callback=_delivery,
             )
             producer.poll(0)
 
@@ -352,7 +412,7 @@ async def produce_data(config: ProduceConfig):
         return {"status": "already_producing"}
     _is_producing = True
     loop = asyncio.get_event_loop()
-    t = threading.Thread(target=_run_producer, args=(config.topic_name, loop), daemon=True)
+    t = threading.Thread(target=_run_producer, args=(config.dataset_name, loop), daemon=True)
     t.start()
     return {"status": "started"}
 
