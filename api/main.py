@@ -41,16 +41,16 @@ app.add_middleware(
 DATASET_CONFIGS = {
     "Hospital Admissions Data": {
         "csv": "datasets/HDHI_Admission_data.csv",
-        "topic": "hospital-stream",
+        "topic_base": "hospital",
         "attributes": [
             {"label": "Gender", "column": "GENDER"},
             {"label": "Hospitalization Outcome", "column": "OUTCOME"},
-            {"label": "Primary Diagnosis", "column": "PRIMARY_DIAGNOSIS"},
+            {"label": "Age", "column": "AGE_BIN"},
         ],
     },
     "Stocks": {
         "csv": "datasets/AAPL_pct_change_binned.csv",
-        "topic": "stock-stream",
+        "topic_base": "stock",
         "attributes": [
             {"label": "Price Change", "column": "PRICE_CHANGE_BIN"},
             {"label": "Volume", "column": "VOLUME_BIN"},
@@ -64,17 +64,8 @@ def _preprocess_hospital(df: pd.DataFrame) -> pd.DataFrame:
     out["GENDER"] = df["GENDER"].astype(str).str.strip()
     outcome_map = {"DISCHARGE": "discharged", "EXPIRY": "expired", "DAMA": "dama"}
     out["OUTCOME"] = df["OUTCOME"].astype(str).str.strip().map(outcome_map).fillna("discharged")
-
-    def get_diagnosis(row):
-        if row.get("ACS", 0) == 1:
-            return "acs"
-        if row.get("HEART FAILURE", 0) == 1:
-            return "heart-failure"
-        if row.get("ANAEMIA", 0) == 1 or row.get("SEVERE ANAEMIA", 0) == 1:
-            return "anaemia"
-        return "acs"
-
-    out["PRIMARY_DIAGNOSIS"] = df.apply(get_diagnosis, axis=1)
+    age_bins = pd.qcut(df["AGE"], q=5, labels=["0", "1", "2", "3", "4"], duplicates="drop")
+    out["AGE_BIN"] = age_bins.astype(str)
     return out
 
 
@@ -98,6 +89,8 @@ _stop_event = threading.Event()
 _is_running = False
 _is_producing = False
 _current_metrics: dict = {}
+_topic_counters: Dict[str, int] = {}
+_producer_generation = 0
 
 
 class ConsumerConfig(BaseModel):
@@ -317,9 +310,9 @@ async def get_datasets():
                         "unique_values": [str(v) for v in unique_vals],
                     })
 
-            result.append({"name": name, "topic": cfg["topic"], "attributes": attrs})
+            result.append({"name": name, "topic_base": cfg["topic_base"], "attributes": attrs})
         except Exception as e:
-            result.append({"name": name, "topic": cfg["topic"], "attributes": [], "error": str(e)})
+            result.append({"name": name, "topic_base": cfg["topic_base"], "attributes": [], "error": str(e)})
 
     return result
 
@@ -357,7 +350,7 @@ async def get_status():
 
 
 # ── Producer thread + endpoint ────────────────────────────────────────────────
-def _run_producer(dataset_name: str, loop: asyncio.AbstractEventLoop):
+def _run_producer(dataset_name: str, topic_name: str, generation: int, loop: asyncio.AbstractEventLoop):
     global _is_producing
     try:
         from confluent_kafka import Producer
@@ -377,44 +370,65 @@ def _run_producer(dataset_name: str, loop: asyncio.AbstractEventLoop):
         if preprocessor:
             df = preprocessor(df)
 
-        topic_name = cfg["topic"]
         total = len(df)
 
         conf = {"bootstrap.servers": "localhost:9092", "client.id": socket.gethostname()}
         producer = Producer(conf)
 
-        for _, row in df.iterrows():
-            producer.produce(
-                topic=topic_name,
-                key=b"stream",
-                value=row.to_json().encode(),
-            )
-            producer.poll(0)
-
-        producer.flush()
-        asyncio.run_coroutine_threadsafe(
-            _broadcast({"type": "produce_done", "published": total, "topic": topic_name}),
-            loop,
-        ).result()
+        announced = False
+        # Keep cycling through the dataset so the consumer never runs out of
+        # data; a newer /api/produce call bumps _producer_generation, which
+        # ends this loop.
+        while generation == _producer_generation:
+            for _, row in df.iterrows():
+                if generation != _producer_generation:
+                    break
+                producer.produce(
+                    topic=topic_name,
+                    key=b"stream",
+                    value=row.to_json().encode(),
+                )
+                producer.poll(0)
+            producer.flush()
+            if not announced:
+                asyncio.run_coroutine_threadsafe(
+                    _broadcast({"type": "produce_done", "published": total, "topic": topic_name}),
+                    loop,
+                ).result()
+                announced = True
+                if generation == _producer_generation:
+                    _is_producing = False
     except Exception as exc:
         asyncio.run_coroutine_threadsafe(
             _broadcast({"type": "produce_error", "message": str(exc)}),
             loop,
         ).result()
-    finally:
-        _is_producing = False
+        if generation == _producer_generation:
+            _is_producing = False
 
 
 @app.post("/api/produce")
 async def produce_data(config: ProduceConfig):
-    global _is_producing
+    global _is_producing, _producer_generation
     if _is_producing:
         return {"status": "already_producing"}
+
+    cfg = DATASET_CONFIGS.get(config.dataset_name)
+    if not cfg:
+        return {"status": "error", "message": f"Unknown dataset: {config.dataset_name}"}
+
+    _topic_counters[config.dataset_name] = _topic_counters.get(config.dataset_name, 0) + 1
+    topic_name = f"{cfg['topic_base']}{_topic_counters[config.dataset_name]}"
+
+    _producer_generation += 1
+    generation = _producer_generation
     _is_producing = True
     loop = asyncio.get_event_loop()
-    t = threading.Thread(target=_run_producer, args=(config.dataset_name, loop), daemon=True)
+    t = threading.Thread(
+        target=_run_producer, args=(config.dataset_name, topic_name, generation, loop), daemon=True
+    )
     t.start()
-    return {"status": "started"}
+    return {"status": "started", "topic": topic_name}
 
 
 @app.get("/api/produce/status")
