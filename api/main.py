@@ -64,16 +64,39 @@ def _preprocess_hospital(df: pd.DataFrame) -> pd.DataFrame:
     out["GENDER"] = df["GENDER"].astype(str).str.strip()
     outcome_map = {"DISCHARGE": "discharged", "EXPIRY": "expired", "DAMA": "dama"}
     out["OUTCOME"] = df["OUTCOME"].astype(str).str.strip().map(outcome_map).fillna("discharged")
-    age_bins = pd.qcut(df["AGE"], q=5, labels=["0", "1", "2", "3", "4"], duplicates="drop")
-    out["AGE_BIN"] = age_bins.astype(str)
+    out["AGE_BIN"] = pd.cut(
+        df["AGE"],
+        bins=[0, 51, 60, 65, 72, 200],
+        labels=["4-51", "51-60", "60-65", "65-72", "72+"],
+        right=False,
+    ).astype(str)
+    # Extra columns surfaced in the tooltip
+    out["AGE"] = df["AGE"].astype(str)
+    out["RURAL"] = df["RURAL"].astype(str).str.strip()
+    out["D_O_A"] = df["D.O.A"].astype(str)
+    out["DURATION_OF_STAY"] = df["DURATION OF STAY"].astype(str)
     return out
 
 
 def _preprocess_stocks(df: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame()
-    out["PRICE_CHANGE_BIN"] = df["bins"].astype(str)
-    volume_bins = pd.qcut(df["Volume"], q=3, labels=["low", "medium", "high"], duplicates="drop")
-    out["VOLUME_BIN"] = volume_bins.astype(str)
+    price_labels = {
+        0: "-11.78% to -1.51%",
+        1: "-1.51% to -0.39%",
+        2: "-0.39% to 0.34%",
+        3: "0.34% to 1.52%",
+        4: "1.52% to 19.27%",
+    }
+    out["PRICE_CHANGE_BIN"] = df["bins"].map(price_labels).fillna("Unknown")
+    out["VOLUME_BIN"] = pd.cut(
+        df["Volume"],
+        bins=[0, 57664900, float("inf")],
+        labels=["Low Volume", "High Volume"],
+    ).astype(str)
+    # Extra columns for tooltip
+    out["DATE"] = df["Date"].astype(str)
+    out["PCT_CHANGE"] = df["% Change"].astype(str)
+    out["VOLUME"] = df["Volume"].astype(str)
     return out
 
 
@@ -195,7 +218,7 @@ def _run_consumer(config: ConsumerConfig):
 
             row = json.loads(msg.value().decode())
             attr_value = str(row.get(col, ""))
-            message_buffer.append({col: attr_value})
+            message_buffer.append(row)
 
             if len(message_buffer) > config.window_size:
                 message_buffer.pop(0)
@@ -251,7 +274,10 @@ def _run_consumer(config: ConsumerConfig):
 
             is_fair = bool(query_result and "✅" in query_result[0])
 
-            window_items = [row[col] for row in message_buffer]
+            window_items = [
+                {"value": str(row.get(col, "")), **{k: str(v) if v is not None else "" for k, v in row.items()}}
+                for row in message_buffer
+            ]
 
             _metrics_queue.put({
                 "type": "window_update",
