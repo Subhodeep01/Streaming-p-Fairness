@@ -5,3 +5,6 @@ metrics
 consumer_editable.py
 figures
 plotters
+metric_throughput
+.claude
+api

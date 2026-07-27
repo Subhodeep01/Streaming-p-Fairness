@@ -14,16 +14,21 @@ attr = input("Please write the name of the attribute you want to stream and moni
 print("Values for the selected attribute: ", df[attr])
 is_discrete = int(input("Is the selected attribute discrete? (0 == No | 1 == Yes)"))
 # is_discrete = 0
-clean = load_clean(CSV, attr, date_col)
+extra_cols_input = input("Extra columns to retain in the stream, comma-separated (blank for none): ")
+extra_cols = [c.strip() for c in extra_cols_input.split(",") if c.strip() and c.strip() != attr]
+max_bins_input = input("Max bins for continuous binning, only used if not discrete (blank for default 5): ")
+max_bins = int(max_bins_input) if max_bins_input.strip() else 5
+dayfirst = bool(int(input("Is the date column day-first, e.g. DD-MM-YYYY? (0 == No | 1 == Yes): ") or "0"))
+clean = load_clean(CSV, attr, date_col, dayfirst=dayfirst)
 print(clean)
 if is_discrete == 0:
-    cleaned_df, summary = make_bins(clean, date_col, attr, max_bins=5, min_pct= 0.15)
+    cleaned_df, summary = make_bins(clean, date_col, attr, max_bins=max_bins, min_pct= 0.15)
     print("After binning we have: \n", summary.to_string(index=False))
     summary.to_csv(f"cleaned_input_files/summary_{cleaned_df.columns[0]}.csv", index=False)
 else:
     df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
     cleaned=df.dropna(subset=date_col).reset_index(drop=True)
-    cleaned_df = clean[[attr]]
+    cleaned_df = clean[[attr] + extra_cols]
     print(cleaned_df)
 
 cleaned_df.to_csv("cleaned_input_files/cleaned_df.csv", index=False)
