@@ -164,6 +164,12 @@ def _run_consumer(config: ConsumerConfig):
             except (ValueError, TypeError):
                 typed_fairness[k] = int(v)
 
+        # No ceiling concept in the UI's request payload yet -- use
+        # block_size (the max any category could ever reach in one block)
+        # so the check reduces to the floor-only behavior this endpoint
+        # has always had.
+        ceiling = {k: config.block_size for k in typed_fairness}
+
         kafka_conf = {
             "bootstrap.servers": "localhost:9092",
             "group.id": f"ui-fairness-{col}",
@@ -224,7 +230,7 @@ def _run_consumer(config: ConsumerConfig):
             t3 = time.perf_counter()
             tracemalloc.reset_peak()
             query_result, fair_block = verify_sketch(
-                sketch, position, config.block_size, typed_fairness, popped
+                sketch, position, config.block_size, typed_fairness, ceiling, popped
             )
             t4 = time.perf_counter()
             tracemalloc.stop()
