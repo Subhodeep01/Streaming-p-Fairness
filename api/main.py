@@ -48,12 +48,43 @@ DATASET_CONFIGS = {
             {"label": "Age", "column": "AGE_BIN"},
         ],
     },
-    "Stocks": {
+    "Stocks (AAPL)": {
         "csv": "datasets/AAPL_pct_change_binned.csv",
         "topic_base": "stock",
         "attributes": [
             {"label": "Price Change", "column": "PRICE_CHANGE_BIN"},
             {"label": "Volume", "column": "VOLUME_BIN"},
+        ],
+    },
+    "Tweets": {
+        "csv": "datasets/tweets.csv",
+        "topic_base": "tweets",
+        "attributes": [
+            {"label": "Engagement", "column": "engagement"},
+            {"label": "Tweet Length", "column": "tweet_length_tier"},
+            {"label": "Sentiment", "column": "sentiment"},
+            {"label": "Topic", "column": "topic"},
+        ],
+    },
+    "Movies": {
+        "csv": "datasets/movie_vote_summary.csv",
+        "topic_base": "movies",
+        "attributes": [
+            {"label": "Audience Reception", "column": "audience_reception"},
+            {"label": "Popularity Tier", "column": "popularity_tier"},
+            {"label": "Release Era", "column": "release_era"},
+            {"label": "Genre", "column": "genre-1"},
+        ],
+    },
+    "Census": {
+        "csv": "datasets/adult_census_income_education_collapsed.csv",
+        "topic_base": "census",
+        "attributes": [
+            {"label": "Sex", "column": "sex"},
+            {"label": "Education", "column": "education_collapsed"},
+            {"label": "Race", "column": "race"},
+            {"label": "Marital Status", "column": "marital_status"},
+            {"label": "Occupation", "column": "occupation"},
         ],
     },
 }
@@ -70,11 +101,11 @@ def _preprocess_hospital(df: pd.DataFrame) -> pd.DataFrame:
         labels=["4-51", "51-60", "60-65", "65-72", "72+"],
         right=False,
     ).astype(str)
-    # Extra columns surfaced in the tooltip
     out["AGE"] = df["AGE"].astype(str)
     out["RURAL"] = df["RURAL"].astype(str).str.strip()
     out["D_O_A"] = df["D.O.A"].astype(str)
     out["DURATION_OF_STAY"] = df["DURATION OF STAY"].astype(str)
+    out["_display_title"] = "Age " + out["AGE"] + " · " + out["GENDER"]
     return out
 
 
@@ -93,16 +124,63 @@ def _preprocess_stocks(df: pd.DataFrame) -> pd.DataFrame:
         bins=[0, 57664900, float("inf")],
         labels=["Low Volume", "High Volume"],
     ).astype(str)
-    # Extra columns for tooltip
     out["DATE"] = df["Date"].astype(str)
     out["PCT_CHANGE"] = df["% Change"].astype(str)
     out["VOLUME"] = df["Volume"].astype(str)
+    out["_display_title"] = df["Date"].astype(str)
+    return out
+
+
+def _preprocess_tweets(df: pd.DataFrame) -> pd.DataFrame:
+    out = pd.DataFrame()
+    out["engagement"] = df["engagement"].astype(str).str.strip()
+    out["tweet_length_tier"] = df["tweet_length_tier"].astype(str).str.strip()
+    out["sentiment"] = df["sentiment"].astype(str).str.strip()
+    out["topic"] = df["topic"].astype(str).str.strip()
+    out["likes"] = df["likes"].astype(str)
+    out["tweet"] = df["tweet"].astype(str).str[:120]
+    out["stream_date"] = df["stream_date"].astype(str)
+    out["_display_title"] = df["topic"].astype(str).str.strip()
+    return out
+
+
+def _preprocess_movies(df: pd.DataFrame) -> pd.DataFrame:
+    out = pd.DataFrame()
+    out["audience_reception"] = df["audience_reception"].astype(str).str.strip()
+    out["popularity_tier"] = df["popularity_tier"].astype(str).str.strip()
+    out["release_era"] = df["release_era"].astype(str).str.strip()
+    out["genre-1"] = df["genre-1"].astype(str).str.strip()
+    out["title"] = df["title"].astype(str)
+    out["avg_rating"] = df["avg_rating"].round(2).astype(str)
+    out["vote_count"] = df["vote_count"].astype(str)
+    out["genres"] = df["genres"].astype(str)
+    out["stream_date"] = df["stream_date"].astype(str)
+    out["_display_title"] = df["title"].astype(str).str.extract(r'^(.+?)\s*\(\d{4}\)')[0].fillna(df["title"].astype(str))
+    return out
+
+
+def _preprocess_census(df: pd.DataFrame) -> pd.DataFrame:
+    out = pd.DataFrame()
+    out["sex"] = df["sex"].astype(str).str.strip()
+    out["education_collapsed"] = df["education_collapsed"].astype(str).str.strip()
+    out["race"] = df["race"].astype(str).str.strip()
+    out["marital_status"] = df["marital_status"].astype(str).str.strip()
+    out["occupation"] = df["occupation"].astype(str).str.strip()
+    out["age"] = df["age"].astype(str)
+    out["workclass"] = df["workclass"].astype(str).str.strip()
+    out["income"] = df["income"].astype(str).str.strip()
+    out["hours_per_week"] = df["hours_per_week"].astype(str)
+    out["native_country"] = df["native_country"].astype(str).str.strip()
+    out["_display_title"] = df["age"].astype(str) + " y/o · " + df["occupation"].astype(str).str.strip()
     return out
 
 
 DATASET_PREPROCESSORS = {
     "Hospital Admissions Data": _preprocess_hospital,
-    "Stocks": _preprocess_stocks,
+    "Stocks (AAPL)": _preprocess_stocks,
+    "Tweets": _preprocess_tweets,
+    "Movies": _preprocess_movies,
+    "Census": _preprocess_census,
 }
 
 # ── Shared state ──────────────────────────────────────────────────────────────
