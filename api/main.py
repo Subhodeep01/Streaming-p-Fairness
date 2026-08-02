@@ -518,6 +518,21 @@ def _run_producer(dataset_name: str, topic_name: str, generation: int, loop: asy
             _is_producing = False
 
 
+def _delete_kafka_topic(topic_name: str):
+    try:
+        from confluent_kafka.admin import AdminClient
+        admin = AdminClient({"bootstrap.servers": "localhost:9092"})
+        fs = admin.delete_topics([topic_name], operation_timeout=5)
+        for t, f in fs.items():
+            try:
+                f.result()
+            except Exception:
+                pass
+        time.sleep(1.5)
+    except Exception:
+        pass
+
+
 @app.post("/api/produce")
 async def produce_data(config: ProduceConfig):
     global _is_producing, _producer_generation
@@ -530,6 +545,7 @@ async def produce_data(config: ProduceConfig):
 
     _topic_counters[config.dataset_name] = _topic_counters.get(config.dataset_name, 0) + 1
     topic_name = f"{cfg['topic_base']}{_topic_counters[config.dataset_name]}"
+    _delete_kafka_topic(topic_name)
 
     _producer_generation += 1
     generation = _producer_generation
