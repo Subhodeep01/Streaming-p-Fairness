@@ -101,11 +101,18 @@ def _preprocess_hospital(df: pd.DataFrame) -> pd.DataFrame:
         labels=["4-51", "51-60", "60-65", "65-72", "72+"],
         right=False,
     ).astype(str)
+    out["MRD_NO"] = df["MRD No."].astype(str)
     out["AGE"] = df["AGE"].astype(str)
     out["RURAL"] = df["RURAL"].astype(str).str.strip()
     out["D_O_A"] = df["D.O.A"].astype(str)
     out["DURATION_OF_STAY"] = df["DURATION OF STAY"].astype(str)
-    out["_display_title"] = "Age " + out["AGE"] + " · " + out["GENDER"]
+    out["ICU_STAY"] = df["duration of intensive unit stay"].astype(str)
+    out["ADMISSION_TYPE"] = df["TYPE OF ADMISSION-EMERGENCY/OPD"].astype(str).str.strip()
+    out["SMOKING"] = df["SMOKING "].map({1: "Smoker", 0: "Non-Smoker"}).fillna("Unknown")
+    out["ALCOHOL"] = df["ALCOHOL"].map({1: "Yes", 0: "No"}).fillna("Unknown")
+    out["DIABETES"] = df["DM"].map({1: "Yes", 0: "No"}).fillna("Unknown")
+    out["HYPERTENSION"] = df["HTN"].map({1: "Yes", 0: "No"}).fillna("Unknown")
+    out["_display_title"] = "MRD " + df["MRD No."].astype(str)
     return out
 
 
