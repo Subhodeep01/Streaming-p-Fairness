@@ -25,6 +25,7 @@ from pydantic import BaseModel
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 from utils import sketcher, verify_sketch
+from bfair import bfair_reorder as _bfair_reorder
 
 app = FastAPI(title="Streaming p-Fairness API")
 
@@ -206,6 +207,8 @@ class ConsumerConfig(BaseModel):
     window_size: int
     block_size: int
     fairness: Dict[str, int]
+    proportions: Dict[str, float] = {}
+    landmark_size: int = 5
     attribute_column: str = "GENDER"
     max_windows: int = 50
     delay_ms: int = 0
@@ -274,11 +277,14 @@ def _run_consumer(config: ConsumerConfig):
 
         kafka_conf = {
             "bootstrap.servers": "localhost:9092",
-            "group.id": f"ui-fairness-{col}",
+            "group.id": f"ui-fairness-{col}-{int(time.time())}",
             "auto.offset.reset": "earliest",
+            "enable.auto.commit": "false",
         }
         consumer = KafkaConsumer(kafka_conf)
-        consumer.subscribe([config.topic_name])
+        from confluent_kafka import TopicPartition, OFFSET_BEGINNING
+        tp = TopicPartition(config.topic_name, 0, OFFSET_BEGINNING)
+        consumer.assign([tp])
 
         message_buffer: list = []
         sketch: list = []
@@ -364,6 +370,40 @@ def _run_consumer(config: ConsumerConfig):
                 for row in message_buffer
             ]
 
+            # bfair reorder — landmark look-ahead when window is unfair
+            reordered_items = window_items
+            if config.proportions:
+                try:
+                    if not is_fair and config.landmark_size > 0:
+                        # Pull landmark extra messages for look-ahead
+                        landmark_rows = []
+                        for _ in range(config.landmark_size):
+                            if _stop_event.is_set():
+                                break
+                            lm = consumer.poll(0.5)
+                            if lm is None or lm.error():
+                                continue
+                            landmark_rows.append(json.loads(lm.value().decode()))
+                        combined = list(message_buffer) + landmark_rows
+                    else:
+                        combined = list(message_buffer)
+
+                    reordered_combined = _bfair_reorder(
+                        combined,
+                        config.proportions,
+                        config.block_size,
+                        attr_fn=lambda r: str(r.get(col, "")),
+                    )
+                    reordered_items = [
+                        {"value": str(r.get(col, "")), **{k: str(v) if v is not None else "" for k, v in r.items()}}
+                        for r in reordered_combined[:config.window_size]
+                    ]
+                    # Advance buffer by landmark (tail of reordered combined)
+                    if not is_fair and landmark_rows:
+                        message_buffer = list(reordered_combined[config.landmark_size:config.landmark_size + config.window_size])
+                except Exception as e:
+                    print(f"[bfair] {e}", flush=True)
+
             _metrics_queue.put({
                 "type": "window_update",
                 "window_number": window_counter,
@@ -373,6 +413,7 @@ def _run_consumer(config: ConsumerConfig):
                 "query_ms": round(processing_ms, 4),
                 "metrics": metrics,
                 "window_items": window_items,
+                "reordered_items": reordered_items,
                 "block_size": config.block_size,
                 "attribute": col,
             })
@@ -399,6 +440,7 @@ def _run_consumer(config: ConsumerConfig):
 
 
 # ── REST endpoints ────────────────────────────────────────────────────────────
+
 @app.get("/api/datasets")
 async def get_datasets():
     result = []
@@ -426,6 +468,29 @@ async def get_datasets():
             result.append({"name": name, "topic_base": cfg["topic_base"], "attributes": [], "error": str(e)})
 
     return result
+
+
+class ReorderRequest(BaseModel):
+    window_items: List[dict]
+    window_size: int
+    block_size: int
+    proportions: Dict[str, float]
+    attribute_column: str = "GENDER"
+
+
+@app.post("/api/reorder")
+async def reorder_window(req: ReorderRequest):
+    col = req.attribute_column
+    try:
+        reordered = _bfair_reorder(
+            req.window_items,
+            req.proportions,
+            req.block_size,
+            attr_fn=lambda r: str(r.get(col, "")),
+        )
+        return {"status": "ok", "reordered_items": reordered[:req.window_size]}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 @app.post("/api/start")
