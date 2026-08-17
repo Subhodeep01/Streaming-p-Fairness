@@ -3,22 +3,33 @@ import math
 import numpy as np
 from collections import deque
 
-def position_finder(df: pd.Series, fairness, block_size):
+def position_finder(df: pd.Series, fairness, floor, ceiling, block_size):
+    """`fairness` is the reorder target fed to the reordering algorithms
+    (must stay non-zero/sum-to-block_size for bfair_reorder/naive_reorder to
+    work -- unchanged role from before). `floor`/`ceiling` are the
+    independent per-category bounds [floor(p*block_size), ceil(p*block_size)]
+    used only for the fairness *check* (utils.verify_sketch) -- floor can
+    legitimately be 0 for rare categories, unlike `fairness`.
+
+    Each of the three dicts is prompted independently (only if still empty),
+    so a caller can alias floor=fairness to skip the floor prompt and reuse
+    the reorder target as the check floor too."""
     unique = df.iloc[:, 0].unique().tolist()
     unique.sort()
     position = {unique[i]: i for i in range(len(unique))}
     if len(fairness) == 0:
         for i in range(len(unique)):
-            fairness[unique[i]] = int(input(f"Input the fairness constraint for {df.columns[0]} {unique[i]} (how many of this item you want in the stream) cannot exceed {block_size}: "))
-            if sum(fairness.values()) >= block_size:
-                print("Total fairness exceeding 100%. Updating the rest...")
-                diff = sum(fairness.values()) - block_size
-                fairness[unique[i]] -= diff
-                rest = {unique[j]: 0 for j in range(i+1, len(unique))}
-                fairness.update(rest)
-                break
-        print("Fairness constraints: ", fairness)
-    return position, fairness
+            fairness[unique[i]] = int(input(f"Input the fairness constraint (reorder target) for {df.columns[0]} {unique[i]}, cannot exceed {block_size}: "))
+        print("Fairness (reorder target) constraints: ", fairness)
+    if len(floor) == 0:
+        for i in range(len(unique)):
+            floor[unique[i]] = int(input(f"Input the FLOOR fairness constraint for {df.columns[0]} {unique[i]} (minimum count in a block of {block_size}): "))
+        print("Fairness floor constraints: ", floor)
+    if len(ceiling) == 0:
+        for i in range(len(unique)):
+            ceiling[unique[i]] = int(input(f"Input the CEILING fairness constraint for {df.columns[0]} {unique[i]} (maximum count in a block of {block_size}): "))
+        print("Fairness ceiling constraints: ", ceiling)
+    return position, fairness, floor, ceiling
 
 def sketcher(df: pd.Series, sketch, position) -> dict:
     """
@@ -95,7 +106,7 @@ def verify_bwd_sketch(sketch, position, block_size, fairness):
     
     return stream_data, fair_block
 
-def verify_sketch(sketch, position, block_size, fairness, popped_ele):
+def verify_sketch(sketch, position, block_size, floor, ceiling, popped_ele):
     rec = [0]*len(position)
     # stream_data = {}
     stream_data = []
@@ -110,10 +121,10 @@ def verify_sketch(sketch, position, block_size, fairness, popped_ele):
             block_start = sketch[i-1]
         block_end = sketch[i+block_size - 1]
 
-        
+
         for key, pos in position.items():
             diff = block_end[pos] - block_start[pos]
-            if diff >= fairness[key]:
+            if floor[key] <= diff <= ceiling[key]:
                 fairs += 1
                 
         if fairs == len(position.keys()):
@@ -133,10 +144,14 @@ def verify_sketch(sketch, position, block_size, fairness, popped_ele):
 
 # PREPROCESSING TOOLS ---------------------------------------------------------------------------------------------
 
-def load_clean(path, col, date_col) -> pd.DataFrame:
+def load_clean(path, col, date_col, dayfirst=False) -> pd.DataFrame:
     df = pd.read_csv(path, na_values=["", " ", "NA", "N/A", "--"])
     # print(df, col)
-    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+    # dayfirst=True is opt-in per caller, not a global default: pandas applies it
+    # to every numeric-looking date string, including unambiguous ISO YYYY-MM-DD
+    # ones (silently swapping month/day), so flipping it on would corrupt the
+    # other datasets' already-correct date_col parsing.
+    df[date_col] = pd.to_datetime(df[date_col], errors="coerce", dayfirst=dayfirst)
     cleaned = df.dropna(subset=date_col).reset_index(drop=True)
     print(f"Loaded {len(df)} rows – kept {len(cleaned)} after cleaning.")
     return cleaned

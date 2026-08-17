@@ -5,9 +5,11 @@ def max_rep_blocks(input_col:list, block_size, window_size, fairness:dict):
     unique = list(fairness.keys())
     unique.sort()
     t_xs = {i:input_col.count(i) for i in unique}
-    
+
     m = window_size * block_size
     for i, Tx in t_xs.items():
+        if fairness[i] == 0:
+            continue  # no minimum required for this category -- doesn't constrain m
         m = int(min(m, math.floor(Tx/fairness[i])))
     rem_counts = {}
     for i, Tx in t_xs.items():
@@ -51,16 +53,24 @@ def build_max_rep(m, rem_counts:dict, unique:list, block_size:int, fairness_crit
                 del rem_counts[r]
                 
         while len(unfair) != block_size:
-            if not rem_counts:
-                break
             diff = {k: rem_counts.get(k, 0) - fairness_criteria.get(k, 0) for k in set(rem_counts) | set(fairness_criteria)}
-
+            
             # Sort D by difference in descending order (so higher difference first)
             rem_sorted = dict(sorted(rem_counts.items(), key=lambda x: diff[x[0]], reverse=True))
+            # print(rem_sorted)
+            # input()
             for r, rcounts in rem_sorted.items():
                 l = block_size - len(unfair)
-                unfair.extend([r] * min(fairness_criteria[r], l, rem_counts[r]))
-                rem_counts[r] -= min(fairness_criteria[r], l, rem_counts[r])
+                # A 0-floor category has no per-block minimum, so it isn't
+                # capped at fairness_criteria[r]=0 here (that would leave
+                # rem_counts[r] undrained forever) -- it's free to fill
+                # whatever room remains, same as any other leftover item.
+                cap = fairness_criteria[r] if fairness_criteria[r] > 0 else l
+                take = min(cap, l, rem_counts[r])
+                unfair.extend([r] * take)
+                # print(unfair)
+                # print(rem_counts, rem_sorted)
+                rem_counts[r] -= take
                 if rem_counts[r] == 0: del rem_counts[r]
         # print(rem_counts)        
         if rem_counts: temp_flag = False

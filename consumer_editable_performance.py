@@ -54,7 +54,8 @@ if __name__ == "__main__":
         print(pd.read_csv(f"cleaned_input_files/summary_{df_temp.columns[0]}.csv"))
     except:
         print("Discrete value, no binning info")
-    position, fairness = position_finder(df_temp, fairness, BLOCK_SIZE)
+    ceiling = {}
+    position, fairness, floor, ceiling = position_finder(df_temp, fairness, fairness, ceiling, BLOCK_SIZE)
 
     metrics["Cardinality"]=len(position.keys())
 
@@ -136,7 +137,7 @@ if __name__ == "__main__":
         sketching_ms = (t2 - t1) * 1000 
         t2 = time.perf_counter()
         tracemalloc.reset_peak()
-        query_result, fair_block = verify_sketch(sketch, position, BLOCK_SIZE, fairness, popped)
+        query_result, fair_block = verify_sketch(sketch, position, BLOCK_SIZE, fairness, ceiling, popped)
         _, query_peak = tracemalloc.get_traced_memory()
         t3 = time.perf_counter()        
 
@@ -237,7 +238,7 @@ if __name__ == "__main__":
             effective_window = read_window[attr][i+WINDOW_SIZE:i+WINDOW_SIZE+1]
             popped = sketcher(read_window[attr], sketch, position)
 
-            query_result, fair_block = verify_sketch(sketch, position, BLOCK_SIZE, fairness, popped)
+            query_result, fair_block = verify_sketch(sketch, position, BLOCK_SIZE, fairness, ceiling, popped)
 
             fair_block_sum += fair_block
             
@@ -326,7 +327,7 @@ if __name__ == "__main__":
                 # print( round(sketch_peak_upd / (1024 * 1024), 4))
             t8 = time.perf_counter()
             tracemalloc.reset_peak()
-            query_result, fair_block_new = verify_sketch(sketch, position, BLOCK_SIZE, fairness, popped)
+            query_result, fair_block_new = verify_sketch(sketch, position, BLOCK_SIZE, fairness, ceiling, popped)
             _, query_peak = tracemalloc.get_traced_memory()
             t9 = time.perf_counter()
             # print(query_result, fair_block_new)
@@ -336,7 +337,7 @@ if __name__ == "__main__":
                 temp_read_window = pd.DataFrame(ideal_stream, columns=[attr])
                 id_eff_win = temp_read_window[attr][i:WINDOW_SIZE + i]
                 _ = sketcher(id_eff_win, brt_sketch, position)
-                qr, brt_fr_new = verify_sketch(brt_sketch, position, BLOCK_SIZE, fairness, None)
+                qr, brt_fr_new = verify_sketch(brt_sketch, position, BLOCK_SIZE, fairness, ceiling, None)
 
                 # print(qr, brt_fr_new)
                 brt_blocks += brt_fr_new
