@@ -394,9 +394,13 @@ def _run_consumer(config: ConsumerConfig):
                     else:
                         combined = list(message_buffer)
 
+                    from collections import Counter as _Counter
+                    _counts = _Counter(str(r.get(col, "")) for r in combined)
+                    _tot = sum(_counts.values())
+                    props = {k: v / _tot for k, v in _counts.items()}
                     reordered_combined = _bfair_reorder(
                         combined,
-                        config.proportions,
+                        props,
                         config.block_size,
                         attr_fn=lambda r: str(r.get(col, "")),
                     )
@@ -488,13 +492,17 @@ class ReorderRequest(BaseModel):
 async def reorder_window(req: ReorderRequest):
     col = req.attribute_column
     try:
+        from collections import Counter
+        counts = Counter(str(r.get(col, "")) for r in req.window_items)
+        total = sum(counts.values())
+        props = {k: v / total for k, v in counts.items()}
         reordered = _bfair_reorder(
             req.window_items,
-            req.proportions,
+            props,
             req.block_size,
             attr_fn=lambda r: str(r.get(col, "")),
         )
-        return {"status": "ok", "reordered_items": reordered[:req.window_size]}
+        return {"status": "ok", "reordered_items": reordered, "window_size": req.window_size}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
