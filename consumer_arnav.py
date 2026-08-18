@@ -10,12 +10,24 @@ from utils import sketcher, verify_sketch
 from bfair import bfair_reorder
 
 
+def parse_proportions(spec):
+    props = {}
+    for part in spec.split(","):
+        key, sep, val = part.partition("=")
+        if not sep:
+            raise argparse.ArgumentTypeError(f"expected value=proportion, got '{part}'")
+        props[key.strip()] = float(val)
+    return props
+
+
 parser = argparse.ArgumentParser(description="Arnav's p-fairness sliding-window consumer")
 parser.add_argument("--topic",        type=str, required=True)
 parser.add_argument("--window_size",  type=int, required=True)
 parser.add_argument("--block_size",   type=int, required=True)
 parser.add_argument("--attribute",    type=str, default="GENDER")
 parser.add_argument("--max_windows",  type=int, default=50)
+parser.add_argument("--proportions",  type=parse_proportions, default={},
+                    help="Target proportion per attribute value, e.g. 'M=0.6,F=0.4'")
 args = parser.parse_args()
 
 assert args.window_size % args.block_size == 0, "block_size must divide window_size evenly"
@@ -25,6 +37,7 @@ WINDOW_SIZE = args.window_size
 BLOCK_SIZE  = args.block_size
 ATTRIBUTE   = args.attribute
 MAX_WINDOWS = args.max_windows
+PROPORTIONS = args.proportions
 
 
 consumer = Consumer({
@@ -38,7 +51,7 @@ print(f"Subscribed to '{TOPIC}' | window={WINDOW_SIZE} block={BLOCK_SIZE} attr={
 
 window_buffer = []
 sketch        = []
-fairness      = {}
+proportions   = {}
 floor         = {}
 ceiling       = {}
 position      = {}
@@ -49,28 +62,28 @@ fair_reordered = 0
 total_blocks   = 0
 
 
-def build_fairness(values):
-    unique = sorted(set(values))
-    n      = len(unique)
-    p      = 1 / n
-    pos    = {v: i for i, v in enumerate(unique)}
-    flr    = {v: math.floor(p * BLOCK_SIZE) for v in unique}
-    cel    = {v: math.ceil(p * BLOCK_SIZE) for v in unique}
-    base   = BLOCK_SIZE // n
-    fair   = {v: base for v in unique}
-    for i, v in enumerate(unique):
-        if i < BLOCK_SIZE % n:
-            fair[v] += 1
-    return pos, fair, flr, cel
+def build_constraints(values):
+    unique = sorted(PROPORTIONS) if PROPORTIONS else sorted(set(values))
+    props  = dict(PROPORTIONS)
+    if not props:
+        for v in unique:
+            props[v] = float(input(f"Input the fairness proportion for {ATTRIBUTE} {v}: "))
+    missing = sorted(set(values) - set(props))
+    if missing:
+        raise SystemExit(f"No fairness proportion given for {ATTRIBUTE} value(s): {missing}")
+    total = sum(props.values())
+    if total <= 0:
+        raise SystemExit("Fairness proportions must sum to a positive value")
+    props = {k: v / total for k, v in props.items()}
+    pos = {v: i for i, v in enumerate(unique)}
+    flr = {v: math.floor(props[v] * BLOCK_SIZE) for v in unique}
+    cel = {v: math.ceil(props[v] * BLOCK_SIZE) for v in unique}
+    return pos, props, flr, cel
 
 
-def reorder_window(rows, fairness_counts):
-    total = sum(fairness_counts.values())
-    if not total:
-        return rows
-    proportions = {k: v / total for k, v in fairness_counts.items()}
+def reorder_window(rows, props):
     try:
-        return bfair_reorder(rows, proportions, BLOCK_SIZE, attr_fn=lambda r: str(r.get(ATTRIBUTE, "")))
+        return bfair_reorder(rows, props, BLOCK_SIZE, attr_fn=lambda r: str(r.get(ATTRIBUTE, "")))
     except Exception as e:
         print(f"  [reorder] failed: {e}")
         return rows
@@ -90,14 +103,14 @@ def count_fair_blocks(rows, pos, flr, cel):
 
 
 def process_window():
-    global fair_original, fair_reordered, total_blocks, fairness, floor, ceiling, position
+    global fair_original, fair_reordered, total_blocks, proportions, floor, ceiling, position
 
     rows = list(window_buffer)
 
-    if not fairness:
+    if not proportions:
         vals = [str(r.get(ATTRIBUTE, "")) for r in rows]
-        position, fairness, floor, ceiling = build_fairness(vals)
-        print(f"Fairness constraints: {fairness} | floor: {floor} | ceiling: {ceiling}")
+        position, proportions, floor, ceiling = build_constraints(vals)
+        print(f"Fairness proportions: {proportions} | floor: {floor} | ceiling: {ceiling}")
 
     attr_series = pd.Series([str(r.get(ATTRIBUTE, "")) for r in rows])
 
@@ -114,7 +127,7 @@ def process_window():
 
     is_fair = bool(query_result and "✅" in query_result[0])
 
-    reordered_rows  = reorder_window(rows, fairness)
+    reordered_rows  = reorder_window(rows, proportions)
     reordered_fairs = count_fair_blocks(reordered_rows, position, floor, ceiling)
     fair_reordered += reordered_fairs
 
