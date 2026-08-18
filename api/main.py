@@ -223,15 +223,6 @@ class ProduceConfig(BaseModel):
 # ── Fairness constraint helpers ───────────────────────────────────────────────
 
 def normalized_proportions(proportions: Dict[str, float], fairness: Dict[str, int]) -> Dict[str, float]:
-    """Target proportion per attribute value, scaled to sum to 1.
-
-    bfair_reorder requires proportions summing to exactly 1, so the caller's
-    numbers are rescaled rather than trusted. Values the caller listed with a
-    zero target are kept as keys: bfair raises KeyError on any item whose group
-    is missing from the constraint, and a zero target legitimately means "this
-    value must not appear in a fair block". `fairness` (integer per-block
-    counts) is only a fallback for callers predating the proportions field.
-    """
     raw = {str(k): float(v) for k, v in (proportions or fairness).items()}
     total = sum(raw.values())
     if total <= 0:
@@ -240,22 +231,12 @@ def normalized_proportions(proportions: Dict[str, float], fairness: Dict[str, in
 
 
 def bounds_from_proportions(props: Dict[str, float], block_size: int) -> tuple[dict, dict]:
-    """Per-value [floor, ceiling] block bounds implied by `props`.
-
-    Deliberately mirrors bfair_reorder's own internal F=floor(p*s)/C=ceil(p*s)
-    so the reorder optimises exactly the criterion verify_sketch then checks --
-    the alignment consumer_editable_bfair_performance.bfair_reorder_variant
-    documents. Deriving these from a separate integer constraint instead lets
-    the two drift apart, and the reported fair-block counts stop describing the
-    reorder that was actually performed.
-    """
     floor = {k: math.floor(p * block_size) for k, p in props.items()}
     ceiling = {k: math.ceil(p * block_size) for k, p in props.items()}
     return floor, ceiling
 
 
 def count_fair_blocks(rows: list, col: str, floor: dict, ceiling: dict, block_size: int) -> int:
-    """Fair aligned blocks in `rows`, by the same bounds verify_sketch applies."""
     fair = 0
     for start in range(0, len(rows) - block_size + 1, block_size):
         counts: dict = defaultdict(int)
@@ -356,8 +337,6 @@ def _run_consumer(config: ConsumerConfig):
             window_counter += 1
             count += 1
             read_window = pd.DataFrame(message_buffer)
-            # position is keyed by str; a numeric-looking column would otherwise
-            # KeyError inside sketcher and kill this thread
             read_window[col] = read_window[col].astype(str)
 
             tracemalloc.start()
@@ -465,11 +444,6 @@ def _run_consumer(config: ConsumerConfig):
                 "fair_blocks_before": fair_block,
                 "fair_blocks_after": fair_block_reordered,
                 "blocks_per_window": sum_blocks,
-                # False => these constraints are unreachable for this window's
-                # items, so the reorder emits its longest fair region and
-                # concentrates the leftover "defect" at one end (see bfair
-                # docstring). The UI should say so rather than present the
-                # defect as a failed reorder.
                 "reorder_feasible": fair_block_reordered >= sum_blocks,
             })
 
