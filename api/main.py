@@ -607,6 +607,14 @@ def _run_producer(dataset_name: str, topic_name: str, generation: int, loop: asy
         if preprocessor:
             df = preprocessor(df)
 
+        # The CSVs are grouped by attribute value, so consecutive rows carry
+        # the same value and any window covers only one or two of them. That
+        # is an artifact of file order rather than of the stream, and it makes
+        # small look-aheads useless: the items needed to balance a block are
+        # thousands of rows away. Shuffling once gives each window a
+        # representative mix.
+        df = df.sample(frac=1, random_state=0).reset_index(drop=True)
+
         total = len(df)
 
         conf = {"bootstrap.servers": "localhost:9092", "client.id": socket.gethostname()}
