@@ -121,14 +121,22 @@ def _preprocess_hospital(df: pd.DataFrame) -> pd.DataFrame:
 
 def _preprocess_stocks(df: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame()
-    price_labels = {
-        0: "-11.78% to -1.51%",
-        1: "-1.51% to -0.39%",
-        2: "-0.39% to 0.34%",
-        3: "0.34% to 1.52%",
-        4: "1.52% to 19.27%",
-    }
-    out["PRICE_CHANGE_BIN"] = df["bins"].map(price_labels).fillna("Unknown")
+    if "bins" in df.columns:
+        price_labels = {
+            0: "-11.78% to -1.51%",
+            1: "-1.51% to -0.39%",
+            2: "-0.39% to 0.34%",
+            3: "0.34% to 1.52%",
+            4: "1.52% to 19.27%",
+        }
+        out["PRICE_CHANGE_BIN"] = df["bins"].map(price_labels).fillna("Unknown")
+    else:
+        from utils import bin_with_min_pct
+        codes, edges = bin_with_min_pct(df["% Change"], max_bins=5, min_pct=0.15)
+        price_labels = {
+            i: f"{edges[i]:.2f}% to {edges[i + 1]:.2f}%" for i in range(len(edges) - 1)
+        }
+        out["PRICE_CHANGE_BIN"] = pd.Series(codes).map(price_labels).fillna("Unknown")
     out["VOLUME_BIN"] = pd.cut(
         df["Volume"],
         bins=[0, 57664900, float("inf")],
