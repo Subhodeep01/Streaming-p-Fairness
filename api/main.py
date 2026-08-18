@@ -44,6 +44,7 @@ app.add_middleware(
 DATASET_CONFIGS = {
     "Hospital Admissions Data": {
         "csv": "datasets/HDHI_Admission_data.csv",
+        "csv_alts": ["datasets/HDHI_Admission_data_modified.csv"],
         "topic_base": "hospital",
         "attributes": [
             {"label": "Gender", "column": "GENDER"},
@@ -191,6 +192,14 @@ def _preprocess_census(df: pd.DataFrame) -> pd.DataFrame:
     out["native_country"] = df["native_country"].astype(str).str.strip()
     out["_display_title"] = df["age"].astype(str) + " y/o · " + df["occupation"].astype(str).str.strip()
     return out
+
+
+def resolve_csv(cfg: dict) -> str:
+    for rel in [cfg["csv"]] + cfg.get("csv_alts", []):
+        path = os.path.join(_ROOT, rel)
+        if os.path.exists(path):
+            return path
+    return os.path.join(_ROOT, cfg["csv"])
 
 
 DATASET_PREPROCESSORS = {
@@ -482,7 +491,7 @@ def _run_consumer(config: ConsumerConfig):
 async def get_datasets():
     result = []
     for name, cfg in DATASET_CONFIGS.items():
-        csv_path = os.path.join(_ROOT, cfg["csv"])
+        csv_path = resolve_csv(cfg)
         try:
             df = pd.read_csv(csv_path)
             preprocessor = DATASET_PREPROCESSORS.get(name)
@@ -591,7 +600,7 @@ def _run_producer(dataset_name: str, topic_name: str, generation: int, loop: asy
             ).result()
             return
 
-        csv_path = os.path.join(_ROOT, cfg["csv"])
+        csv_path = resolve_csv(cfg)
         df = pd.read_csv(csv_path)
 
         preprocessor = DATASET_PREPROCESSORS.get(dataset_name)
