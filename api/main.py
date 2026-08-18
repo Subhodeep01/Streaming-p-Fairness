@@ -7,6 +7,7 @@ Run from the Streaming-p-Fairness root:
 
 import asyncio
 import json
+import math
 import os
 import queue
 import sys
@@ -14,6 +15,7 @@ import threading
 import time
 import tracemalloc
 import socket
+from collections import defaultdict
 from typing import Dict, List
 
 import numpy as np
@@ -218,6 +220,52 @@ class ProduceConfig(BaseModel):
     dataset_name: str
 
 
+# ── Fairness constraint helpers ───────────────────────────────────────────────
+
+def normalized_proportions(proportions: Dict[str, float], fairness: Dict[str, int]) -> Dict[str, float]:
+    """Target proportion per attribute value, scaled to sum to 1.
+
+    bfair_reorder requires proportions summing to exactly 1, so the caller's
+    numbers are rescaled rather than trusted. Values the caller listed with a
+    zero target are kept as keys: bfair raises KeyError on any item whose group
+    is missing from the constraint, and a zero target legitimately means "this
+    value must not appear in a fair block". `fairness` (integer per-block
+    counts) is only a fallback for callers predating the proportions field.
+    """
+    raw = {str(k): float(v) for k, v in (proportions or fairness).items()}
+    total = sum(raw.values())
+    if total <= 0:
+        raise ValueError("fairness proportions must include at least one positive target")
+    return {k: v / total for k, v in raw.items()}
+
+
+def bounds_from_proportions(props: Dict[str, float], block_size: int) -> tuple[dict, dict]:
+    """Per-value [floor, ceiling] block bounds implied by `props`.
+
+    Deliberately mirrors bfair_reorder's own internal F=floor(p*s)/C=ceil(p*s)
+    so the reorder optimises exactly the criterion verify_sketch then checks --
+    the alignment consumer_editable_bfair_performance.bfair_reorder_variant
+    documents. Deriving these from a separate integer constraint instead lets
+    the two drift apart, and the reported fair-block counts stop describing the
+    reorder that was actually performed.
+    """
+    floor = {k: math.floor(p * block_size) for k, p in props.items()}
+    ceiling = {k: math.ceil(p * block_size) for k, p in props.items()}
+    return floor, ceiling
+
+
+def count_fair_blocks(rows: list, col: str, floor: dict, ceiling: dict, block_size: int) -> int:
+    """Fair aligned blocks in `rows`, by the same bounds verify_sketch applies."""
+    fair = 0
+    for start in range(0, len(rows) - block_size + 1, block_size):
+        counts: dict = defaultdict(int)
+        for row in rows[start:start + block_size]:
+            counts[str(row.get(col, ""))] += 1
+        if all(floor[k] <= counts.get(k, 0) <= ceiling[k] for k in floor):
+            fair += 1
+    return fair
+
+
 # ── Broadcast helpers ─────────────────────────────────────────────────────────
 async def _broadcast(msg: dict):
     dead = []
@@ -259,27 +307,10 @@ def _run_consumer(config: ConsumerConfig):
         from confluent_kafka import Consumer as KafkaConsumer
 
         col = config.attribute_column
-        unique_vals = sorted(config.fairness.keys())
+        props = normalized_proportions(config.proportions, config.fairness)
+        floor, ceiling = bounds_from_proportions(props, config.block_size)
+        unique_vals = sorted(props)
         position = {v: i for i, v in enumerate(unique_vals)}
-
-        typed_fairness: dict = {}
-        sample = unique_vals[0] if unique_vals else "F"
-        for k, v in config.fairness.items():
-            try:
-                if isinstance(sample, (int, np.integer)):
-                    typed_fairness[int(k)] = int(v)
-                elif isinstance(sample, (float, np.floating)):
-                    typed_fairness[float(k)] = int(v)
-                else:
-                    typed_fairness[k] = int(v)
-            except (ValueError, TypeError):
-                typed_fairness[k] = int(v)
-
-        # No ceiling concept in the UI's request payload yet -- use
-        # block_size (the max any category could ever reach in one block)
-        # so the check reduces to the floor-only behavior this endpoint
-        # has always had.
-        ceiling = {k: config.block_size for k in typed_fairness}
 
         kafka_conf = {
             "bootstrap.servers": "localhost:9092",
@@ -300,6 +331,7 @@ def _run_consumer(config: ConsumerConfig):
         count = 0
         window_counter = 0
         fair_blocks_ini = 0
+        fair_blocks_reordered = 0
         total_blocks = 0
         process_latency: list = []
         sketch_bld_latency: list = []
@@ -314,7 +346,6 @@ def _run_consumer(config: ConsumerConfig):
                 break
 
             row = json.loads(msg.value().decode())
-            attr_value = str(row.get(col, ""))
             message_buffer.append(row)
 
             if len(message_buffer) > config.window_size:
@@ -325,6 +356,9 @@ def _run_consumer(config: ConsumerConfig):
             window_counter += 1
             count += 1
             read_window = pd.DataFrame(message_buffer)
+            # position is keyed by str; a numeric-looking column would otherwise
+            # KeyError inside sketcher and kill this thread
+            read_window[col] = read_window[col].astype(str)
 
             tracemalloc.start()
             t1 = time.perf_counter()
@@ -344,7 +378,7 @@ def _run_consumer(config: ConsumerConfig):
             t3 = time.perf_counter()
             tracemalloc.reset_peak()
             query_result, fair_block = verify_sketch(
-                sketch, position, config.block_size, typed_fairness, ceiling, popped
+                sketch, position, config.block_size, floor, ceiling, popped
             )
             t4 = time.perf_counter()
             tracemalloc.stop()
@@ -358,17 +392,6 @@ def _run_consumer(config: ConsumerConfig):
             sketching_sum += sketching_ms
             processing_sum += processing_ms
 
-            metrics = {
-                "Window size": config.window_size,
-                "Block size": config.block_size,
-                "Avg preprocessing (ms)": round(sketching_sum / count, 4),
-                "Avg query processing (ms)": round(processing_sum / count, 4),
-                "Windows covered": window_counter,
-                "Fair blocks": fair_blocks_ini,
-                "Total blocks": total_blocks,
-                "Fair block %": round(fair_blocks_ini * 100 / total_blocks, 2) if total_blocks else 0,
-            }
-
             is_fair = bool(query_result and "✅" in query_result[0])
 
             window_items = [
@@ -378,41 +401,54 @@ def _run_consumer(config: ConsumerConfig):
 
             # bfair reorder — landmark look-ahead when window is unfair
             reordered_items = window_items
-            if config.proportions:
-                try:
-                    if not is_fair and config.landmark_size > 0:
-                        # Pull landmark extra messages for look-ahead
-                        landmark_rows = []
-                        for _ in range(config.landmark_size):
-                            if _stop_event.is_set():
-                                break
-                            lm = consumer.poll(0.5)
-                            if lm is None or lm.error():
-                                continue
-                            landmark_rows.append(json.loads(lm.value().decode()))
-                        combined = list(message_buffer) + landmark_rows
-                    else:
-                        combined = list(message_buffer)
+            reordered_rows = list(message_buffer)
+            landmark_rows: list = []
+            try:
+                if not is_fair and config.landmark_size > 0:
+                    # Pull landmark extra messages for look-ahead
+                    for _ in range(config.landmark_size):
+                        if _stop_event.is_set():
+                            break
+                        lm = consumer.poll(0.5)
+                        if lm is None or lm.error():
+                            continue
+                        landmark_rows.append(json.loads(lm.value().decode()))
+                combined = list(message_buffer) + landmark_rows
 
-                    from collections import Counter as _Counter
-                    _counts = _Counter(str(r.get(col, "")) for r in combined)
-                    _tot = sum(_counts.values())
-                    props = {k: v / _tot for k, v in _counts.items()}
-                    reordered_combined = _bfair_reorder(
-                        combined,
-                        props,
-                        config.block_size,
-                        attr_fn=lambda r: str(r.get(col, "")),
-                    )
-                    reordered_items = [
-                        {"value": str(r.get(col, "")), **{k: str(v) if v is not None else "" for k, v in r.items()}}
-                        for r in reordered_combined[:config.window_size]
-                    ]
-                    # Advance buffer by landmark (tail of reordered combined)
-                    if not is_fair and landmark_rows:
-                        message_buffer = list(reordered_combined[config.landmark_size:config.landmark_size + config.window_size])
-                except Exception as e:
-                    print(f"[bfair] {e}", flush=True)
+                reordered_combined = _bfair_reorder(
+                    combined,
+                    props,
+                    config.block_size,
+                    attr_fn=lambda r: str(r.get(col, "")),
+                )
+                reordered_rows = list(reordered_combined[:config.window_size])
+                reordered_items = [
+                    {"value": str(r.get(col, "")), **{k: str(v) if v is not None else "" for k, v in r.items()}}
+                    for r in reordered_rows
+                ]
+                # Advance buffer by landmark (tail of reordered combined)
+                if landmark_rows:
+                    message_buffer = list(reordered_combined[config.landmark_size:config.landmark_size + config.window_size])
+            except Exception as e:
+                print(f"[bfair] {e}", flush=True)
+
+            fair_block_reordered = count_fair_blocks(
+                reordered_rows, col, floor, ceiling, config.block_size
+            )
+            fair_blocks_reordered += fair_block_reordered
+
+            metrics = {
+                "Window size": config.window_size,
+                "Block size": config.block_size,
+                "Avg preprocessing (ms)": round(sketching_sum / count, 4),
+                "Avg query processing (ms)": round(processing_sum / count, 4),
+                "Windows covered": window_counter,
+                "Fair blocks": fair_blocks_ini,
+                "Fair blocks (reordered)": fair_blocks_reordered,
+                "Total blocks": total_blocks,
+                "Fair block %": round(fair_blocks_ini * 100 / total_blocks, 2) if total_blocks else 0,
+                "Fair block % (reordered)": round(fair_blocks_reordered * 100 / total_blocks, 2) if total_blocks else 0,
+            }
 
             _metrics_queue.put({
                 "type": "window_update",
@@ -426,6 +462,15 @@ def _run_consumer(config: ConsumerConfig):
                 "reordered_items": reordered_items,
                 "block_size": config.block_size,
                 "attribute": col,
+                "fair_blocks_before": fair_block,
+                "fair_blocks_after": fair_block_reordered,
+                "blocks_per_window": sum_blocks,
+                # False => these constraints are unreachable for this window's
+                # items, so the reorder emits its longest fair region and
+                # concentrates the leftover "defect" at one end (see bfair
+                # docstring). The UI should say so rather than present the
+                # defect as a failed reorder.
+                "reorder_feasible": fair_block_reordered >= sum_blocks,
             })
 
             if config.delay_ms > 0:
@@ -492,17 +537,28 @@ class ReorderRequest(BaseModel):
 async def reorder_window(req: ReorderRequest):
     col = req.attribute_column
     try:
-        from collections import Counter
-        counts = Counter(str(r.get(col, "")) for r in req.window_items)
-        total = sum(counts.values())
-        props = {k: v / total for k, v in counts.items()}
+        props = normalized_proportions(req.proportions, {})
+        floor, ceiling = bounds_from_proportions(props, req.block_size)
+        blocks_per_window = req.window_size // req.block_size
+
+        before = count_fair_blocks(req.window_items, col, floor, ceiling, req.block_size)
         reordered = _bfair_reorder(
             req.window_items,
             props,
             req.block_size,
             attr_fn=lambda r: str(r.get(col, "")),
         )
-        return {"status": "ok", "reordered_items": reordered, "window_size": req.window_size}
+        after = count_fair_blocks(reordered[:req.window_size], col, floor, ceiling, req.block_size)
+
+        return {
+            "status": "ok",
+            "reordered_items": reordered,
+            "window_size": req.window_size,
+            "fair_blocks_before": before,
+            "fair_blocks_after": after,
+            "blocks_per_window": blocks_per_window,
+            "reorder_feasible": after >= blocks_per_window,
+        }
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
