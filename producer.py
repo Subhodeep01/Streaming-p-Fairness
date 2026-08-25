@@ -27,9 +27,9 @@ if __name__ == "__main__":
     def delivery_report(err, msg):
         """ Called once for each message produced to indicate delivery result. """
         if err is not None:
-            print(f"❌ Message delivery failed: {err}")
+            print(f"[ERROR] Message delivery failed: {err}")
         else:
-            print(f"✅ Message delivered to {msg.topic()} [{msg.partition()}] at offset {msg.offset()}")
+            print(f"[OK] Message delivered to {msg.topic()} [{msg.partition()}] at offset {msg.offset()}")
 
     def main() -> None:
         for _, row in cleaned_df.iterrows():
@@ -51,6 +51,6 @@ if __name__ == "__main__":
 
         # Wait for all messages to be delivered
         producer.flush()
-        print(f"✅ Published {len(cleaned_df)} rows to topic '{TOPIC}'. Done.")
+        print(f"[DONE] Published {len(cleaned_df)} rows to topic '{TOPIC}'.")
 
     main()

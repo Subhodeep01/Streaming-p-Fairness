@@ -7,6 +7,7 @@ Run from the Streaming-p-Fairness root:
 
 import asyncio
 import json
+import math
 import os
 import queue
 import sys
@@ -14,6 +15,7 @@ import threading
 import time
 import tracemalloc
 import socket
+from collections import defaultdict
 from typing import Dict, List
 
 import numpy as np
@@ -25,6 +27,7 @@ from pydantic import BaseModel
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 from utils import sketcher, verify_sketch
+from bfair import bfair_reorder as _bfair_reorder
 
 app = FastAPI(title="Streaming p-Fairness API")
 
@@ -41,6 +44,7 @@ app.add_middleware(
 DATASET_CONFIGS = {
     "Hospital Admissions Data": {
         "csv": "datasets/HDHI_Admission_data.csv",
+        "csv_alts": ["datasets/HDHI_Admission_data_modified.csv"],
         "topic_base": "hospital",
         "attributes": [
             {"label": "Gender", "column": "GENDER"},
@@ -48,12 +52,43 @@ DATASET_CONFIGS = {
             {"label": "Age", "column": "AGE_BIN"},
         ],
     },
-    "Stocks": {
+    "Stocks (AAPL)": {
         "csv": "datasets/AAPL_pct_change_binned.csv",
         "topic_base": "stock",
         "attributes": [
             {"label": "Price Change", "column": "PRICE_CHANGE_BIN"},
             {"label": "Volume", "column": "VOLUME_BIN"},
+        ],
+    },
+    "Tweets": {
+        "csv": "datasets/tweets.csv",
+        "topic_base": "tweets",
+        "attributes": [
+            {"label": "Engagement", "column": "engagement"},
+            {"label": "Tweet Length", "column": "tweet_length_tier"},
+            {"label": "Sentiment", "column": "sentiment"},
+            {"label": "Topic", "column": "topic"},
+        ],
+    },
+    "Movies": {
+        "csv": "datasets/movie_vote_summary.csv",
+        "topic_base": "movies",
+        "attributes": [
+            {"label": "Audience Reception", "column": "audience_reception"},
+            {"label": "Popularity Tier", "column": "popularity_tier"},
+            {"label": "Release Era", "column": "release_era"},
+            {"label": "Genre", "column": "genre-1"},
+        ],
+    },
+    "Census": {
+        "csv": "datasets/adult_census_income_education_collapsed.csv",
+        "topic_base": "census",
+        "attributes": [
+            {"label": "Sex", "column": "sex"},
+            {"label": "Education", "column": "education_collapsed"},
+            {"label": "Race", "column": "race"},
+            {"label": "Marital Status", "column": "marital_status"},
+            {"label": "Occupation", "column": "occupation"},
         ],
     },
 }
@@ -64,22 +99,115 @@ def _preprocess_hospital(df: pd.DataFrame) -> pd.DataFrame:
     out["GENDER"] = df["GENDER"].astype(str).str.strip()
     outcome_map = {"DISCHARGE": "discharged", "EXPIRY": "expired", "DAMA": "dama"}
     out["OUTCOME"] = df["OUTCOME"].astype(str).str.strip().map(outcome_map).fillna("discharged")
-    age_bins = pd.qcut(df["AGE"], q=5, labels=["0", "1", "2", "3", "4"], duplicates="drop")
-    out["AGE_BIN"] = age_bins.astype(str)
+    out["AGE_BIN"] = pd.cut(
+        df["AGE"],
+        bins=[0, 51, 60, 65, 72, 200],
+        labels=["4-51", "51-60", "60-65", "65-72", "72+"],
+        right=False,
+    ).astype(str)
+    out["MRD_NO"] = df["MRD No."].astype(str)
+    out["AGE"] = df["AGE"].astype(str)
+    out["RURAL"] = df["RURAL"].astype(str).str.strip()
+    out["D_O_A"] = df["D.O.A"].astype(str)
+    out["DURATION_OF_STAY"] = df["DURATION OF STAY"].astype(str)
+    out["ICU_STAY"] = df["duration of intensive unit stay"].astype(str)
+    out["ADMISSION_TYPE"] = df["TYPE OF ADMISSION-EMERGENCY/OPD"].astype(str).str.strip()
+    out["SMOKING"] = df["SMOKING "].map({1: "Smoker", 0: "Non-Smoker"}).fillna("Unknown")
+    out["ALCOHOL"] = df["ALCOHOL"].map({1: "Yes", 0: "No"}).fillna("Unknown")
+    out["DIABETES"] = df["DM"].map({1: "Yes", 0: "No"}).fillna("Unknown")
+    out["HYPERTENSION"] = df["HTN"].map({1: "Yes", 0: "No"}).fillna("Unknown")
+    out["_display_title"] = "MRD " + df["MRD No."].astype(str)
     return out
 
 
 def _preprocess_stocks(df: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame()
-    out["PRICE_CHANGE_BIN"] = df["bins"].astype(str)
-    volume_bins = pd.qcut(df["Volume"], q=3, labels=["low", "medium", "high"], duplicates="drop")
-    out["VOLUME_BIN"] = volume_bins.astype(str)
+    if "bins" in df.columns:
+        price_labels = {
+            0: "-11.78% to -1.51%",
+            1: "-1.51% to -0.39%",
+            2: "-0.39% to 0.34%",
+            3: "0.34% to 1.52%",
+            4: "1.52% to 19.27%",
+        }
+        out["PRICE_CHANGE_BIN"] = df["bins"].map(price_labels).fillna("Unknown")
+    else:
+        from utils import bin_with_min_pct
+        codes, edges = bin_with_min_pct(df["% Change"], max_bins=5, min_pct=0.15)
+        price_labels = {
+            i: f"{edges[i]:.2f}% to {edges[i + 1]:.2f}%" for i in range(len(edges) - 1)
+        }
+        out["PRICE_CHANGE_BIN"] = pd.Series(codes).map(price_labels).fillna("Unknown")
+    out["VOLUME_BIN"] = pd.cut(
+        df["Volume"],
+        bins=[0, 57664900, float("inf")],
+        labels=["Low Volume", "High Volume"],
+    ).astype(str)
+    out["DATE"] = df["Date"].astype(str)
+    out["PCT_CHANGE"] = df["% Change"].astype(str)
+    out["VOLUME"] = df["Volume"].astype(str)
+    out["_display_title"] = df["Date"].astype(str)
     return out
+
+
+def _preprocess_tweets(df: pd.DataFrame) -> pd.DataFrame:
+    out = pd.DataFrame()
+    out["engagement"] = df["engagement"].astype(str).str.strip()
+    out["tweet_length_tier"] = df["tweet_length_tier"].astype(str).str.strip()
+    out["sentiment"] = df["sentiment"].astype(str).str.strip()
+    out["topic"] = df["topic"].astype(str).str.strip()
+    out["likes"] = df["likes"].astype(str)
+    out["tweet"] = df["tweet"].astype(str).str[:120]
+    out["stream_date"] = df["stream_date"].astype(str)
+    out["_display_title"] = df["topic"].astype(str).str.strip()
+    return out
+
+
+def _preprocess_movies(df: pd.DataFrame) -> pd.DataFrame:
+    out = pd.DataFrame()
+    out["audience_reception"] = df["audience_reception"].astype(str).str.strip()
+    out["popularity_tier"] = df["popularity_tier"].astype(str).str.strip()
+    out["release_era"] = df["release_era"].astype(str).str.strip()
+    out["genre-1"] = df["genre-1"].astype(str).str.strip()
+    out["title"] = df["title"].astype(str)
+    out["avg_rating"] = df["avg_rating"].round(2).astype(str)
+    out["vote_count"] = df["vote_count"].astype(str)
+    out["genres"] = df["genres"].astype(str)
+    out["stream_date"] = df["stream_date"].astype(str)
+    out["_display_title"] = df["title"].astype(str).str.extract(r'^(.+?)\s*\(\d{4}\)')[0].fillna(df["title"].astype(str))
+    return out
+
+
+def _preprocess_census(df: pd.DataFrame) -> pd.DataFrame:
+    out = pd.DataFrame()
+    out["sex"] = df["sex"].astype(str).str.strip()
+    out["education_collapsed"] = df["education_collapsed"].astype(str).str.strip()
+    out["race"] = df["race"].astype(str).str.strip()
+    out["marital_status"] = df["marital_status"].astype(str).str.strip()
+    out["occupation"] = df["occupation"].astype(str).str.strip()
+    out["age"] = df["age"].astype(str)
+    out["workclass"] = df["workclass"].astype(str).str.strip()
+    out["income"] = df["income"].astype(str).str.strip()
+    out["hours_per_week"] = df["hours_per_week"].astype(str)
+    out["native_country"] = df["native_country"].astype(str).str.strip()
+    out["_display_title"] = df["age"].astype(str) + " y/o · " + df["occupation"].astype(str).str.strip()
+    return out
+
+
+def resolve_csv(cfg: dict) -> str:
+    for rel in [cfg["csv"]] + cfg.get("csv_alts", []):
+        path = os.path.join(_ROOT, rel)
+        if os.path.exists(path):
+            return path
+    return os.path.join(_ROOT, cfg["csv"])
 
 
 DATASET_PREPROCESSORS = {
     "Hospital Admissions Data": _preprocess_hospital,
-    "Stocks": _preprocess_stocks,
+    "Stocks (AAPL)": _preprocess_stocks,
+    "Tweets": _preprocess_tweets,
+    "Movies": _preprocess_movies,
+    "Census": _preprocess_census,
 }
 
 # ── Shared state ──────────────────────────────────────────────────────────────
@@ -98,6 +226,8 @@ class ConsumerConfig(BaseModel):
     window_size: int
     block_size: int
     fairness: Dict[str, int]
+    proportions: Dict[str, float] = {}
+    landmark_size: int = 5
     attribute_column: str = "GENDER"
     max_windows: int = 50
     delay_ms: int = 0
@@ -105,6 +235,33 @@ class ConsumerConfig(BaseModel):
 
 class ProduceConfig(BaseModel):
     dataset_name: str
+
+
+# ── Fairness constraint helpers ───────────────────────────────────────────────
+
+def normalized_proportions(proportions: Dict[str, float], fairness: Dict[str, int]) -> Dict[str, float]:
+    raw = {str(k): float(v) for k, v in (proportions or fairness).items()}
+    total = sum(raw.values())
+    if total <= 0:
+        raise ValueError("fairness proportions must include at least one positive target")
+    return {k: v / total for k, v in raw.items()}
+
+
+def bounds_from_proportions(props: Dict[str, float], block_size: int) -> tuple[dict, dict]:
+    floor = {k: math.floor(p * block_size) for k, p in props.items()}
+    ceiling = {k: math.ceil(p * block_size) for k, p in props.items()}
+    return floor, ceiling
+
+
+def count_fair_blocks(rows: list, col: str, floor: dict, ceiling: dict, block_size: int) -> int:
+    fair = 0
+    for start in range(0, len(rows) - block_size + 1, block_size):
+        counts: dict = defaultdict(int)
+        for row in rows[start:start + block_size]:
+            counts[str(row.get(col, ""))] += 1
+        if all(floor[k] <= counts.get(k, 0) <= ceiling[k] for k in floor):
+            fair += 1
+    return fair
 
 
 # ── Broadcast helpers ─────────────────────────────────────────────────────────
@@ -148,35 +305,21 @@ def _run_consumer(config: ConsumerConfig):
         from confluent_kafka import Consumer as KafkaConsumer
 
         col = config.attribute_column
-        unique_vals = sorted(config.fairness.keys())
+        props = normalized_proportions(config.proportions, config.fairness)
+        floor, ceiling = bounds_from_proportions(props, config.block_size)
+        unique_vals = sorted(props)
         position = {v: i for i, v in enumerate(unique_vals)}
-
-        typed_fairness: dict = {}
-        sample = unique_vals[0] if unique_vals else "F"
-        for k, v in config.fairness.items():
-            try:
-                if isinstance(sample, (int, np.integer)):
-                    typed_fairness[int(k)] = int(v)
-                elif isinstance(sample, (float, np.floating)):
-                    typed_fairness[float(k)] = int(v)
-                else:
-                    typed_fairness[k] = int(v)
-            except (ValueError, TypeError):
-                typed_fairness[k] = int(v)
-
-        # No ceiling concept in the UI's request payload yet -- use
-        # block_size (the max any category could ever reach in one block)
-        # so the check reduces to the floor-only behavior this endpoint
-        # has always had.
-        ceiling = {k: config.block_size for k in typed_fairness}
 
         kafka_conf = {
             "bootstrap.servers": "localhost:9092",
-            "group.id": f"ui-fairness-{col}",
+            "group.id": f"ui-fairness-{col}-{int(time.time())}",
             "auto.offset.reset": "earliest",
+            "enable.auto.commit": "false",
         }
         consumer = KafkaConsumer(kafka_conf)
-        consumer.subscribe([config.topic_name])
+        from confluent_kafka import TopicPartition, OFFSET_BEGINNING
+        tp = TopicPartition(config.topic_name, 0, OFFSET_BEGINNING)
+        consumer.assign([tp])
 
         message_buffer: list = []
         sketch: list = []
@@ -186,6 +329,7 @@ def _run_consumer(config: ConsumerConfig):
         count = 0
         window_counter = 0
         fair_blocks_ini = 0
+        fair_blocks_reordered = 0
         total_blocks = 0
         process_latency: list = []
         sketch_bld_latency: list = []
@@ -200,8 +344,7 @@ def _run_consumer(config: ConsumerConfig):
                 break
 
             row = json.loads(msg.value().decode())
-            attr_value = str(row.get(col, ""))
-            message_buffer.append({col: attr_value})
+            message_buffer.append(row)
 
             if len(message_buffer) > config.window_size:
                 message_buffer.pop(0)
@@ -211,6 +354,7 @@ def _run_consumer(config: ConsumerConfig):
             window_counter += 1
             count += 1
             read_window = pd.DataFrame(message_buffer)
+            read_window[col] = read_window[col].astype(str)
 
             tracemalloc.start()
             t1 = time.perf_counter()
@@ -230,7 +374,7 @@ def _run_consumer(config: ConsumerConfig):
             t3 = time.perf_counter()
             tracemalloc.reset_peak()
             query_result, fair_block = verify_sketch(
-                sketch, position, config.block_size, typed_fairness, ceiling, popped
+                sketch, position, config.block_size, floor, ceiling, popped
             )
             t4 = time.perf_counter()
             tracemalloc.stop()
@@ -244,6 +388,51 @@ def _run_consumer(config: ConsumerConfig):
             sketching_sum += sketching_ms
             processing_sum += processing_ms
 
+            is_fair = bool(query_result and "✅" in query_result[0])
+
+            window_items = [
+                {"value": str(row.get(col, "")), **{k: str(v) if v is not None else "" for k, v in row.items()}}
+                for row in message_buffer
+            ]
+
+            # bfair reorder — landmark look-ahead when window is unfair
+            reordered_items = window_items
+            reordered_rows = list(message_buffer)
+            landmark_rows: list = []
+            try:
+                if not is_fair and config.landmark_size > 0:
+                    # Pull landmark extra messages for look-ahead
+                    for _ in range(config.landmark_size):
+                        if _stop_event.is_set():
+                            break
+                        lm = consumer.poll(0.5)
+                        if lm is None or lm.error():
+                            continue
+                        landmark_rows.append(json.loads(lm.value().decode()))
+                combined = list(message_buffer) + landmark_rows
+
+                reordered_combined = _bfair_reorder(
+                    combined,
+                    props,
+                    config.block_size,
+                    attr_fn=lambda r: str(r.get(col, "")),
+                )
+                reordered_rows = list(reordered_combined[:config.window_size])
+                reordered_items = [
+                    {"value": str(r.get(col, "")), **{k: str(v) if v is not None else "" for k, v in r.items()}}
+                    for r in reordered_rows
+                ]
+                # Advance buffer by landmark (tail of reordered combined)
+                if landmark_rows:
+                    message_buffer = list(reordered_combined[config.landmark_size:config.landmark_size + config.window_size])
+            except Exception as e:
+                print(f"[bfair] {e}", flush=True)
+
+            fair_block_reordered = count_fair_blocks(
+                reordered_rows, col, floor, ceiling, config.block_size
+            )
+            fair_blocks_reordered += fair_block_reordered
+
             metrics = {
                 "Window size": config.window_size,
                 "Block size": config.block_size,
@@ -251,13 +440,11 @@ def _run_consumer(config: ConsumerConfig):
                 "Avg query processing (ms)": round(processing_sum / count, 4),
                 "Windows covered": window_counter,
                 "Fair blocks": fair_blocks_ini,
+                "Fair blocks (reordered)": fair_blocks_reordered,
                 "Total blocks": total_blocks,
                 "Fair block %": round(fair_blocks_ini * 100 / total_blocks, 2) if total_blocks else 0,
+                "Fair block % (reordered)": round(fair_blocks_reordered * 100 / total_blocks, 2) if total_blocks else 0,
             }
-
-            is_fair = bool(query_result and "✅" in query_result[0])
-
-            window_items = [row[col] for row in message_buffer]
 
             _metrics_queue.put({
                 "type": "window_update",
@@ -268,8 +455,13 @@ def _run_consumer(config: ConsumerConfig):
                 "query_ms": round(processing_ms, 4),
                 "metrics": metrics,
                 "window_items": window_items,
+                "reordered_items": reordered_items,
                 "block_size": config.block_size,
                 "attribute": col,
+                "fair_blocks_before": fair_block,
+                "fair_blocks_after": fair_block_reordered,
+                "blocks_per_window": sum_blocks,
+                "reorder_feasible": fair_block_reordered >= sum_blocks,
             })
 
             if config.delay_ms > 0:
@@ -294,11 +486,12 @@ def _run_consumer(config: ConsumerConfig):
 
 
 # ── REST endpoints ────────────────────────────────────────────────────────────
+
 @app.get("/api/datasets")
 async def get_datasets():
     result = []
     for name, cfg in DATASET_CONFIGS.items():
-        csv_path = os.path.join(_ROOT, cfg["csv"])
+        csv_path = resolve_csv(cfg)
         try:
             df = pd.read_csv(csv_path)
             preprocessor = DATASET_PREPROCESSORS.get(name)
@@ -321,6 +514,44 @@ async def get_datasets():
             result.append({"name": name, "topic_base": cfg["topic_base"], "attributes": [], "error": str(e)})
 
     return result
+
+
+class ReorderRequest(BaseModel):
+    window_items: List[dict]
+    window_size: int
+    block_size: int
+    proportions: Dict[str, float]
+    attribute_column: str = "GENDER"
+
+
+@app.post("/api/reorder")
+async def reorder_window(req: ReorderRequest):
+    col = req.attribute_column
+    try:
+        props = normalized_proportions(req.proportions, {})
+        floor, ceiling = bounds_from_proportions(props, req.block_size)
+        blocks_per_window = req.window_size // req.block_size
+
+        before = count_fair_blocks(req.window_items, col, floor, ceiling, req.block_size)
+        reordered = _bfair_reorder(
+            req.window_items,
+            props,
+            req.block_size,
+            attr_fn=lambda r: str(r.get(col, "")),
+        )
+        after = count_fair_blocks(reordered[:req.window_size], col, floor, ceiling, req.block_size)
+
+        return {
+            "status": "ok",
+            "reordered_items": reordered,
+            "window_size": req.window_size,
+            "fair_blocks_before": before,
+            "fair_blocks_after": after,
+            "blocks_per_window": blocks_per_window,
+            "reorder_feasible": after >= blocks_per_window,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 @app.post("/api/start")
@@ -369,12 +600,14 @@ def _run_producer(dataset_name: str, topic_name: str, generation: int, loop: asy
             ).result()
             return
 
-        csv_path = os.path.join(_ROOT, cfg["csv"])
+        csv_path = resolve_csv(cfg)
         df = pd.read_csv(csv_path)
 
         preprocessor = DATASET_PREPROCESSORS.get(dataset_name)
         if preprocessor:
             df = preprocessor(df)
+
+        df = df.sample(frac=1, random_state=0).reset_index(drop=True)
 
         total = len(df)
 
@@ -413,6 +646,21 @@ def _run_producer(dataset_name: str, topic_name: str, generation: int, loop: asy
             _is_producing = False
 
 
+def _delete_kafka_topic(topic_name: str):
+    try:
+        from confluent_kafka.admin import AdminClient
+        admin = AdminClient({"bootstrap.servers": "localhost:9092"})
+        fs = admin.delete_topics([topic_name], operation_timeout=5)
+        for t, f in fs.items():
+            try:
+                f.result()
+            except Exception:
+                pass
+        time.sleep(1.5)
+    except Exception:
+        pass
+
+
 @app.post("/api/produce")
 async def produce_data(config: ProduceConfig):
     global _is_producing, _producer_generation
@@ -425,6 +673,7 @@ async def produce_data(config: ProduceConfig):
 
     _topic_counters[config.dataset_name] = _topic_counters.get(config.dataset_name, 0) + 1
     topic_name = f"{cfg['topic_base']}{_topic_counters[config.dataset_name]}"
+    _delete_kafka_topic(topic_name)
 
     _producer_generation += 1
     generation = _producer_generation
