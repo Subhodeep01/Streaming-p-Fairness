@@ -95,6 +95,28 @@ DATASET_CONFIGS = {
 
 
 def _preprocess_hospital(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.rename(columns=lambda c: str(c).strip())
+
+    def text(col, default=""):
+        return df[col].astype(str) if col in df.columns else pd.Series(default, index=df.index)
+
+    def flag(col, yes, no):
+        if col not in df.columns:
+            return pd.Series("Unknown", index=df.index)
+        s = df[col]
+        if pd.api.types.is_numeric_dtype(s):
+            return s.map({1: yes, 0: no}).fillna("Unknown")
+        vals = s.astype(str).str.strip().str.lower()
+        return pd.Series(
+            [
+                "Unknown" if v in ("", "nan", "none")
+                else no if v.startswith("not") or v in ("0", "no", "false")
+                else yes
+                for v in vals
+            ],
+            index=df.index,
+        )
+
     out = pd.DataFrame()
     out["GENDER"] = df["GENDER"].astype(str).str.strip()
     outcome_map = {"DISCHARGE": "discharged", "EXPIRY": "expired", "DAMA": "dama"}
@@ -105,18 +127,18 @@ def _preprocess_hospital(df: pd.DataFrame) -> pd.DataFrame:
         labels=["4-51", "51-60", "60-65", "65-72", "72+"],
         right=False,
     ).astype(str)
-    out["MRD_NO"] = df["MRD No."].astype(str)
+    out["MRD_NO"] = text("MRD No.")
     out["AGE"] = df["AGE"].astype(str)
-    out["RURAL"] = df["RURAL"].astype(str).str.strip()
-    out["D_O_A"] = df["D.O.A"].astype(str)
-    out["DURATION_OF_STAY"] = df["DURATION OF STAY"].astype(str)
-    out["ICU_STAY"] = df["duration of intensive unit stay"].astype(str)
-    out["ADMISSION_TYPE"] = df["TYPE OF ADMISSION-EMERGENCY/OPD"].astype(str).str.strip()
-    out["SMOKING"] = df["SMOKING "].map({1: "Smoker", 0: "Non-Smoker"}).fillna("Unknown")
-    out["ALCOHOL"] = df["ALCOHOL"].map({1: "Yes", 0: "No"}).fillna("Unknown")
-    out["DIABETES"] = df["DM"].map({1: "Yes", 0: "No"}).fillna("Unknown")
-    out["HYPERTENSION"] = df["HTN"].map({1: "Yes", 0: "No"}).fillna("Unknown")
-    out["_display_title"] = "MRD " + df["MRD No."].astype(str)
+    out["RURAL"] = text("RURAL").str.strip()
+    out["D_O_A"] = text("D.O.A")
+    out["DURATION_OF_STAY"] = text("DURATION OF STAY")
+    out["ICU_STAY"] = text("duration of intensive unit stay")
+    out["ADMISSION_TYPE"] = text("TYPE OF ADMISSION-EMERGENCY/OPD").str.strip()
+    out["SMOKING"] = flag("SMOKING", "Smoker", "Non-Smoker")
+    out["ALCOHOL"] = flag("ALCOHOL", "Yes", "No")
+    out["DIABETES"] = flag("DM", "Yes", "No")
+    out["HYPERTENSION"] = flag("HTN", "Yes", "No")
+    out["_display_title"] = "MRD " + text("MRD No.")
     return out
 
 
