@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cobloc"
+version = "0.1.0"
+description = "Continuous Block Level Fairness on Data Streams: p-fairness checking and bfair reordering over Kafka"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.109",
+    "uvicorn[standard]>=0.27",
+    "pandas",
+    "numpy",
+    "confluent-kafka",
+    "pydantic",
+]
+
+[project.scripts]
+cobloc = "api.cli:main"
+
+[tool.setuptools]
+packages = ["api"]
+py-modules = ["bfair", "utils"]
