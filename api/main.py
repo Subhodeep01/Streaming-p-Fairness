@@ -420,33 +420,22 @@ def _run_consumer(config: ConsumerConfig):
             # bfair reorder — landmark look-ahead when window is unfair
             reordered_items = window_items
             reordered_rows = list(message_buffer)
-            landmark_rows: list = []
+            # Reorder within this window only. Look-ahead belongs to the
+            # explicit /api/reorder call: polling landmark messages here would
+            # consume rows that are owed to later windows (the window would hop
+            # instead of slide) and would let items from the future appear in
+            # this window's reordered view.
             try:
-                if not is_fair and config.landmark_size > 0:
-                    # Pull landmark extra messages for look-ahead
-                    for _ in range(config.landmark_size):
-                        if _stop_event.is_set():
-                            break
-                        lm = consumer.poll(0.5)
-                        if lm is None or lm.error():
-                            continue
-                        landmark_rows.append(json.loads(lm.value().decode()))
-                combined = list(message_buffer) + landmark_rows
-
-                reordered_combined = _bfair_reorder(
-                    combined,
+                reordered_rows = _bfair_reorder(
+                    list(message_buffer),
                     props,
                     config.block_size,
                     attr_fn=lambda r: str(r.get(col, "")),
                 )
-                reordered_rows = list(reordered_combined[:config.window_size])
                 reordered_items = [
                     {"value": str(r.get(col, "")), **{k: str(v) if v is not None else "" for k, v in r.items()}}
                     for r in reordered_rows
                 ]
-                # Advance buffer by landmark (tail of reordered combined)
-                if landmark_rows:
-                    message_buffer = list(reordered_combined[config.landmark_size:config.landmark_size + config.window_size])
             except Exception as e:
                 print(f"[bfair] {e}", flush=True)
 
