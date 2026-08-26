@@ -7,3 +7,6 @@ figures
 plotters
 metric_throughput
 .claude
+build
+*.egg-info
+dist

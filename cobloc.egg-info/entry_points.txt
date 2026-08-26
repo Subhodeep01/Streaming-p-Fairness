@@ -1,2 +1,0 @@
-[console_scripts]
-cobloc = api.cli:main
