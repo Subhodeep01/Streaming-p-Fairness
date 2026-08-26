@@ -514,10 +514,15 @@ async def get_datasets():
                 col = attr["column"]
                 if col in df.columns:
                     unique_vals = sorted(df[col].dropna().unique().tolist())
+                    shares = df[col].dropna().astype(str).value_counts(normalize=True)
                     attrs.append({
                         "label": attr["label"],
                         "column": col,
                         "unique_values": [str(v) for v in unique_vals],
+                        "suggested_constraints": {
+                            str(v): round(float(shares.get(str(v), 0.0)) * 100, 1)
+                            for v in unique_vals
+                        },
                     })
 
             result.append({"name": name, "topic_base": cfg["topic_base"], "attributes": attrs})
