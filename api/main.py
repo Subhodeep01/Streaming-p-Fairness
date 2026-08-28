@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
@@ -333,16 +333,25 @@ _topic_counters: Dict[str, int] = {}
 _producer_generation = 0
 
 
+# Upper bounds mirroring the UI. Every window is held in memory, reordered and
+# pushed over the socket, so an unbounded window size makes the server and the
+# browser unusable rather than merely slow. Enforced here too so a direct call
+# to /api/start cannot get past the inputs.
+MAX_WINDOW_SIZE = 1000
+MAX_LANDMARK_SIZE = 5000
+MAX_WINDOWS = 100_000
+
+
 class ConsumerConfig(BaseModel):
     topic_name: str
-    window_size: int
-    block_size: int
+    window_size: int = Field(ge=1, le=MAX_WINDOW_SIZE)
+    block_size: int = Field(ge=1, le=MAX_WINDOW_SIZE)
     fairness: Dict[str, int]
     proportions: Dict[str, float] = {}
-    landmark_size: int = 5
+    landmark_size: int = Field(default=5, ge=0, le=MAX_LANDMARK_SIZE)
     attribute_column: str = "GENDER"
-    max_windows: int = 50
-    delay_ms: int = 0
+    max_windows: int = Field(default=50, ge=1, le=MAX_WINDOWS)
+    delay_ms: int = Field(default=0, ge=0, le=60_000)
 
 
 class ProduceConfig(BaseModel):
