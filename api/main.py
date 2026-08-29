@@ -693,13 +693,21 @@ def _run_ablation(req: "AblationRequest") -> dict:
         floor, ceiling = bounds_from_proportions(props, req.block_size)
         attr = lambda r: str(r.get(col, ""))
 
+        # Cost is (windows sampled) x (landmarks swept) x (reorder over
+        # window+x items). Left unbounded, a big window with a large landmark
+        # is minutes of work and freezes the page waiting on it, so cap both
+        # factors and sample landmarks evenly instead of every integer.
+        max_windows_sampled = max(8, min(120, 60_000 // max(1, req.window_size)))
         starts = list(range(0, max(1, len(rows) - req.window_size + 1)))
-        if len(starts) > 120:                      # keep the sweep responsive
-            step = len(starts) // 120 or 1
+        if len(starts) > max_windows_sampled:
+            step = len(starts) // max_windows_sampled or 1
             starts = starts[::step]
 
+        x_step = max(1, math.ceil(req.x_max / 100))
+        x_values = list(range(1, req.x_max + 1, x_step))
+
         points = []
-        for x in range(1, req.x_max + 1):
+        for x in x_values:
             fair = blocks = 0
             elapsed = 0.0
             for s in starts:
