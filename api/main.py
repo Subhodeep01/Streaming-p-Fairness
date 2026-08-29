@@ -856,7 +856,14 @@ def _run_producer(dataset_name: str, topic_name: str, generation: int, loop: asy
 
         total = len(df)
 
-        conf = {"bootstrap.servers": broker(), "client.id": socket.gethostname()}
+        conf = {
+            "bootstrap.servers": broker(),
+            "client.id": socket.gethostname(),
+            # the defaults fill long before a 100k+ row dataset is through
+            "queue.buffering.max.messages": 1_000_000,
+            "queue.buffering.max.kbytes": 1_048_576,
+            "linger.ms": 20,
+        }
         producer = Producer(conf)
 
         announced = False
@@ -867,11 +874,16 @@ def _run_producer(dataset_name: str, topic_name: str, generation: int, loop: asy
             for _, row in df.iterrows():
                 if generation != _producer_generation:
                     break
-                producer.produce(
-                    topic=topic_name,
-                    key=b"stream",
-                    value=row.to_json().encode(),
-                )
+                payload = row.to_json().encode()
+                # produce() raises BufferError once the local queue is full,
+                # which aborted the whole run ("Local: Queue full"). Give
+                # delivery a chance to drain and try the same row again.
+                while generation == _producer_generation:
+                    try:
+                        producer.produce(topic=topic_name, key=b"stream", value=payload)
+                        break
+                    except BufferError:
+                        producer.poll(0.5)
                 producer.poll(0)
             producer.flush()
             if not announced:
