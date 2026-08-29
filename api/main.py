@@ -629,6 +629,83 @@ async def get_datasets():
     return result
 
 
+class AblationRequest(BaseModel):
+    stream_items: List[dict]
+    window_size: int = Field(ge=1, le=MAX_WINDOW_SIZE)
+    block_size: int = Field(ge=1, le=MAX_WINDOW_SIZE)
+    proportions: Dict[str, float]
+    attribute_column: str = "GENDER"
+    x_max: int = Field(default=50, ge=1, le=MAX_LANDMARK_SIZE)
+
+
+def _run_ablation(req: "AblationRequest") -> dict:
+    """Sweep landmark 1..x_max over the pre-reorder stream and report, for each,
+    the share of blocks that come out fair and how long the reorder took.
+
+    simulate_bfair_x_ablation.py measures the same two quantities but drives a
+    real Kafka round trip at window_size=500 over 5000 windows per value, which
+    is ~2 minutes per landmark. Sweeping 50 that way is over an hour, far too
+    slow to run while someone waits. The reorder itself is the part being
+    measured, so it is timed directly here instead.
+
+    Runs off the event loop: this is seconds of straight CPU, and doing it in
+    the request coroutine froze every other endpoint and the websocket with it.
+    """
+    col = req.attribute_column
+    try:
+        props = normalized_proportions(req.proportions, {})
+        floor, ceiling = bounds_from_proportions(props, req.block_size)
+        rows = req.stream_items
+        attr = lambda r: str(r.get(col, ""))
+
+        starts = list(range(0, max(1, len(rows) - req.window_size + 1)))
+        if len(starts) > 120:                      # keep the sweep responsive
+            step = len(starts) // 120 or 1
+            starts = starts[::step]
+
+        points = []
+        for x in range(1, req.x_max + 1):
+            fair = blocks = 0
+            elapsed = 0.0
+            for s in starts:
+                window = rows[s:s + req.window_size]
+                if len(window) < req.window_size:
+                    continue
+                combined = rows[s:s + req.window_size + x]
+                t0 = time.perf_counter()
+                out = _bfair_reorder(combined, props, req.block_size, attr_fn=attr)
+                elapsed += (time.perf_counter() - t0) * 1000
+                shown = out[:req.window_size]
+                fair += count_fair_blocks(shown, col, floor, ceiling, req.block_size)
+                blocks += req.window_size // req.block_size
+            if not blocks:
+                continue
+            points.append({
+                "landmark": x,
+                "pct_fair": round(fair * 100 / blocks, 2),
+                "latency_ms": round(elapsed / max(1, len(starts)), 3),
+            })
+
+        # a point is on the front when nothing else is both fairer and faster
+        pareto = [
+            p for p in points
+            if not any(q["pct_fair"] >= p["pct_fair"] and q["latency_ms"] < p["latency_ms"]
+                       or q["pct_fair"] > p["pct_fair"] and q["latency_ms"] <= p["latency_ms"]
+                       for q in points)
+        ]
+        pareto.sort(key=lambda p: p["latency_ms"])
+
+        return {"status": "ok", "points": points, "pareto": pareto,
+                "windows_evaluated": len(starts)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/api/ablation")
+async def landmark_ablation(req: AblationRequest):
+    return await asyncio.to_thread(_run_ablation, req)
+
+
 class ReorderRequest(BaseModel):
     window_items: List[dict]
     window_size: int
