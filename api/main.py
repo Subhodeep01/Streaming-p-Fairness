@@ -597,8 +597,10 @@ def _run_consumer(config: ConsumerConfig):
 
 # ── REST endpoints ────────────────────────────────────────────────────────────
 
-@app.get("/api/datasets")
-async def get_datasets():
+_datasets_cache: dict = {}
+
+
+def _build_datasets() -> list:
     result = []
     for name, cfg in all_datasets().items():
         csv_path = resolve_csv(cfg)
@@ -627,6 +629,24 @@ async def get_datasets():
             result.append({"name": name, "topic_base": cfg["topic_base"], "attributes": [], "error": str(e)})
 
     return result
+
+
+@app.get("/api/datasets")
+async def get_datasets():
+    """Reads and preprocesses every CSV, which is tens of MB of pandas work.
+    Doing that inline on each call blocked the event loop for seconds at a
+    time, stalling every other request behind it. Built once off the loop and
+    reused; the mtimes of the files key the cache so a swapped CSV is picked up.
+    """
+    key = tuple(
+        (name, os.path.getmtime(p) if os.path.exists(p) else 0)
+        for name, cfg in sorted(all_datasets().items())
+        for p in [resolve_csv(cfg)]
+    )
+    if _datasets_cache.get("key") != key:
+        _datasets_cache["value"] = await asyncio.to_thread(_build_datasets)
+        _datasets_cache["key"] = key
+    return _datasets_cache["value"]
 
 
 class AblationRequest(BaseModel):
