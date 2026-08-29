@@ -360,6 +360,19 @@ class ProduceConfig(BaseModel):
 
 # ── Fairness constraint helpers ───────────────────────────────────────────────
 
+def with_observed_groups(props: Dict[str, float], rows: list, col: str) -> Dict[str, float]:
+    """bfair raises on any item whose group is not a key in the constraint, so
+    one stray or blank value aborts the whole call. Values the caller did not
+    name get a zero target, which is the honest reading: no share was asked
+    for, so a block containing one cannot be fair."""
+    out = dict(props)
+    for r in rows:
+        g = str(r.get(col, ""))
+        if g not in out:
+            out[g] = 0.0
+    return out
+
+
 def normalized_proportions(proportions: Dict[str, float], fairness: Dict[str, int]) -> Dict[str, float]:
     raw = {str(k): float(v) for k, v in (proportions or fairness).items()}
     total = sum(raw.values())
@@ -673,9 +686,11 @@ def _run_ablation(req: "AblationRequest") -> dict:
     """
     col = req.attribute_column
     try:
-        props = normalized_proportions(req.proportions, {})
-        floor, ceiling = bounds_from_proportions(props, req.block_size)
         rows = req.stream_items
+        props = normalized_proportions(
+            with_observed_groups(req.proportions, rows, col), {}
+        )
+        floor, ceiling = bounds_from_proportions(props, req.block_size)
         attr = lambda r: str(r.get(col, ""))
 
         starts = list(range(0, max(1, len(rows) - req.window_size + 1)))
@@ -715,7 +730,19 @@ def _run_ablation(req: "AblationRequest") -> dict:
         ]
         pareto.sort(key=lambda p: p["latency_ms"])
 
-        return {"status": "ok", "points": points, "pareto": pareto,
+        # Landmarks that score identically are not distinct choices, so keep the
+        # smallest of each tie. Without this a short stream, where every
+        # landmark performs the same, produced a slider of interchangeable
+        # points that looked like a tradeoff and was not one.
+        deduped, seen = [], set()
+        for p in sorted(pareto, key=lambda p: p["landmark"]):
+            k = (p["pct_fair"], p["latency_ms"])
+            if k not in seen:
+                seen.add(k)
+                deduped.append(p)
+        deduped.sort(key=lambda p: p["latency_ms"])
+
+        return {"status": "ok", "points": points, "pareto": deduped,
                 "windows_evaluated": len(starts)}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -738,7 +765,9 @@ class ReorderRequest(BaseModel):
 async def reorder_window(req: ReorderRequest):
     col = req.attribute_column
     try:
-        props = normalized_proportions(req.proportions, {})
+        props = normalized_proportions(
+            with_observed_groups(req.proportions, req.window_items, col), {}
+        )
         floor, ceiling = bounds_from_proportions(props, req.block_size)
         blocks_per_window = req.window_size // req.block_size
 
