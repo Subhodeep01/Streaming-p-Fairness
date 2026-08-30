@@ -337,6 +337,12 @@ _producer_generation = 0
 # reviving the old thread so window numbers carried over between sessions.
 _consumer_generation = 0
 
+# How far the consumer may run ahead of the window the user is looking at.
+# Windows are stepped through by hand, so a consumer that streams flat out
+# produces tens of thousands of windows nobody will ever open.
+LEAD_WINDOWS = 200
+_client_position = 0
+
 
 # Upper bounds mirroring the UI. Every window is held in memory, reordered and
 # pushed over the socket, so an unbounded window size makes the server and the
@@ -481,6 +487,14 @@ def _run_consumer(config: ConsumerConfig, generation: int):
         sketch_upd_latency: list = []
 
         while generation == _consumer_generation and not _stop_event.is_set():
+            # Wait for the viewer to catch up rather than racing ahead of them.
+            while (window_counter - _client_position >= LEAD_WINDOWS
+                   and generation == _consumer_generation
+                   and not _stop_event.is_set()):
+                time.sleep(0.05)
+            if generation != _consumer_generation or _stop_event.is_set():
+                break
+
             msg = consumer.poll(0.5)
             if msg is None:
                 continue
@@ -827,9 +841,10 @@ async def start_consumer(config: ConsumerConfig):
     # usually still running. Refusing here meant the caller silently kept
     # watching the previous session, which is why a fresh run could open on
     # window 509. Retire the old consumer and start clean instead.
-    global _consumer_generation
+    global _consumer_generation, _client_position
     _consumer_generation += 1
     generation = _consumer_generation
+    _client_position = 0
     _stop_event.set()
     await asyncio.sleep(0.6)          # let any previous consumer notice and exit
     _stop_event.clear()
@@ -843,6 +858,17 @@ async def start_consumer(config: ConsumerConfig):
     t = threading.Thread(target=_run_consumer, args=(config, generation), daemon=True)
     t.start()
     return {"status": "started", "run_id": generation}
+
+
+@app.post("/api/position")
+async def set_position(payload: dict):
+    """Tell the consumer which window the viewer is on so it can pace itself."""
+    global _client_position
+    try:
+        _client_position = max(0, int(payload.get("window_number", 0)))
+    except (TypeError, ValueError):
+        pass
+    return {"status": "ok", "position": _client_position}
 
 
 @app.post("/api/stop")
