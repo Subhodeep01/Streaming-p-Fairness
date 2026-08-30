@@ -812,7 +812,14 @@ async def reorder_window(req: ReorderRequest):
         floor, ceiling = bounds_from_proportions(props, req.block_size)
         blocks_per_window = req.window_size // req.block_size
 
-        before = count_fair_blocks(req.window_items, col, floor, ceiling, req.block_size)
+        # Count both sides over the window alone. window_items carries the
+        # landmark look-ahead too, so counting all of it made "before" span
+        # window+landmark blocks while "after" spanned the window's, which with
+        # a landmark of 50 reported 5 fair blocks before against 2 after and
+        # read as a reorder that made things worse.
+        before = count_fair_blocks(
+            req.window_items[:req.window_size], col, floor, ceiling, req.block_size
+        )
         reordered = _bfair_reorder(
             req.window_items,
             props,
