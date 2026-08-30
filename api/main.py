@@ -349,7 +349,11 @@ _client_position = 0
 # browser unusable rather than merely slow. Enforced here too so a direct call
 # to /api/start cannot get past the inputs.
 MAX_WINDOW_SIZE = 1000
-MAX_LANDMARK_SIZE = 5000
+# The landmark bound is set by the summary sweep, not by the reorder. Sweeping
+# 1..X costs roughly X^2: landmark 100 over a 100 window session takes ~20s,
+# while the old 5000 ceiling worked out at ~14 hours and simply hung the
+# summary screen. 100 is also the range the ablation script itself sweeps.
+MAX_LANDMARK_SIZE = 100
 MAX_WINDOWS = 100_000
 
 
