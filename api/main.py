@@ -702,6 +702,7 @@ class AblationRequest(BaseModel):
     proportions: Dict[str, float]
     attribute_column: str = "GENDER"
     x_max: int = Field(default=50, ge=1, le=MAX_LANDMARK_SIZE)
+    runs: int = Field(default=10, ge=1, le=50)
 
 
 def _run_ablation(req: "AblationRequest") -> dict:
@@ -726,31 +727,33 @@ def _run_ablation(req: "AblationRequest") -> dict:
         floor, ceiling = bounds_from_proportions(props, req.block_size)
         attr = lambda r: str(r.get(col, ""))
 
-        # Cost is (windows sampled) x (landmarks swept) x (reorder over
-        # window+x items). Left unbounded, a big window with a large landmark
-        # is minutes of work and freezes the page waiting on it, so cap both
-        # factors and sample landmarks evenly instead of every integer.
-        max_windows_sampled = max(8, min(120, 60_000 // max(1, req.window_size)))
+        # Every window of the stream and every landmark in the range, the way
+        # simulate_bfair_x_ablation.py sweeps. Sampling windows was faster but
+        # meant the fairness and latency figures described a subset of the
+        # stream rather than the stream.
         starts = list(range(0, max(1, len(rows) - req.window_size + 1)))
-        if len(starts) > max_windows_sampled:
-            step = len(starts) // max_windows_sampled or 1
-            starts = starts[::step]
-
-        x_step = max(1, math.ceil(req.x_max / 100))
-        x_values = list(range(1, req.x_max + 1, x_step))
+        x_values = list(range(1, req.x_max + 1))
 
         points = []
         for x in x_values:
             fair = blocks = 0
             elapsed = 0.0
+            timed = 0
             for s in starts:
                 window = rows[s:s + req.window_size]
                 if len(window) < req.window_size:
                     continue
                 combined = rows[s:s + req.window_size + x]
-                t0 = time.perf_counter()
-                out = _bfair_reorder(combined, props, req.block_size, attr_fn=attr)
-                elapsed += (time.perf_counter() - t0) * 1000
+                # Average repeated passes like the script's --runs. A single
+                # pass at these sub-millisecond durations is mostly timer
+                # noise, and which landmarks reached the pareto front changed
+                # from one sweep to the next because of it.
+                out = None
+                for _ in range(req.runs):
+                    t0 = time.perf_counter()
+                    out = _bfair_reorder(combined, props, req.block_size, attr_fn=attr)
+                    elapsed += (time.perf_counter() - t0) * 1000
+                    timed += 1
                 shown = out[:req.window_size]
                 fair += count_fair_blocks(shown, col, floor, ceiling, req.block_size)
                 blocks += req.window_size // req.block_size
@@ -759,7 +762,7 @@ def _run_ablation(req: "AblationRequest") -> dict:
             points.append({
                 "landmark": x,
                 "pct_fair": round(fair * 100 / blocks, 2),
-                "latency_ms": round(elapsed / max(1, len(starts)), 3),
+                "latency_ms": round(elapsed / max(1, timed), 3),
             })
 
         # a point is on the front when nothing else is both fairer and faster
