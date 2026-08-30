@@ -331,6 +331,11 @@ _is_producing = False
 _current_metrics: dict = {}
 _topic_counters: Dict[str, int] = {}
 _producer_generation = 0
+# Bumped on every start/stop. A consumer loop exits as soon as its own
+# generation is stale, which _stop_event alone could not guarantee: stop
+# cleared _is_running eagerly and the next start cleared the event again,
+# reviving the old thread so window numbers carried over between sessions.
+_consumer_generation = 0
 
 
 # Upper bounds mirroring the UI. Every window is held in memory, reordered and
@@ -400,14 +405,20 @@ def count_fair_blocks(rows: list, col: str, floor: dict, ceiling: dict, block_si
 
 # ── Broadcast helpers ─────────────────────────────────────────────────────────
 async def _broadcast(msg: dict):
+    # Bound each send. Awaiting a client that has stopped reading blocks this
+    # loop, and with it every HTTP request the server owes anyone else, which
+    # made the whole API look hung whenever a viewer fell behind the stream.
     dead = []
     for ws in _active_ws:
         try:
-            await ws.send_json(msg)
+            await asyncio.wait_for(ws.send_json(msg), timeout=2.0)
+        except asyncio.TimeoutError:
+            dead.append(ws)
         except Exception:
             dead.append(ws)
     for ws in dead:
-        _active_ws.remove(ws)
+        if ws in _active_ws:
+            _active_ws.remove(ws)
 
 
 async def _drain_forever():
@@ -434,7 +445,7 @@ async def _startup():
 
 
 # ── Consumer thread ───────────────────────────────────────────────────────────
-def _run_consumer(config: ConsumerConfig):
+def _run_consumer(config: ConsumerConfig, generation: int):
     try:
         from confluent_kafka import Consumer as KafkaConsumer
 
@@ -469,7 +480,7 @@ def _run_consumer(config: ConsumerConfig):
         sketch_bld_latency: list = []
         sketch_upd_latency: list = []
 
-        while not _stop_event.is_set():
+        while generation == _consumer_generation and not _stop_event.is_set():
             msg = consumer.poll(0.5)
             if msg is None:
                 continue
@@ -571,6 +582,9 @@ def _run_consumer(config: ConsumerConfig):
 
             _metrics_queue.put({
                 "type": "window_update",
+                # so a client can tell this run's updates from a previous run's
+                # stragglers that were already in flight when it restarted
+                "run_id": generation,
                 "window_number": window_counter,
                 "is_fair": is_fair,
                 "fair_text": query_result[0] if query_result else "",
@@ -587,8 +601,13 @@ def _run_consumer(config: ConsumerConfig):
                 "reorder_feasible": fair_block_reordered >= sum_blocks,
             })
 
-            if config.delay_ms > 0:
-                time.sleep(config.delay_ms / 1000.0)
+            # Always yield, even with no configured delay. This thread does
+            # sketching and reordering per window with no natural pause, so at
+            # delay_ms=0 it holds the GIL continuously and the event loop
+            # cannot answer requests, which made the API look hung while a
+            # stream was live. 10ms caps it near 100 windows/sec, which still reads
+            # as live but leaves the loop room to serve requests.
+            time.sleep(max(config.delay_ms / 1000.0, 0.01))
 
             if window_counter >= config.max_windows:
                 break
@@ -804,9 +823,15 @@ async def reorder_window(req: ReorderRequest):
 @app.post("/api/start")
 async def start_consumer(config: ConsumerConfig):
     global _is_running
-    if _is_running:
-        return {"status": "already_running"}
-
+    # A stream no longer ends after a fixed window count, so an earlier one is
+    # usually still running. Refusing here meant the caller silently kept
+    # watching the previous session, which is why a fresh run could open on
+    # window 509. Retire the old consumer and start clean instead.
+    global _consumer_generation
+    _consumer_generation += 1
+    generation = _consumer_generation
+    _stop_event.set()
+    await asyncio.sleep(0.6)          # let any previous consumer notice and exit
     _stop_event.clear()
     while not _metrics_queue.empty():
         try:
@@ -815,14 +840,15 @@ async def start_consumer(config: ConsumerConfig):
             break
 
     _is_running = True
-    t = threading.Thread(target=_run_consumer, args=(config,), daemon=True)
+    t = threading.Thread(target=_run_consumer, args=(config, generation), daemon=True)
     t.start()
-    return {"status": "started"}
+    return {"status": "started", "run_id": generation}
 
 
 @app.post("/api/stop")
 async def stop_consumer():
-    global _is_running
+    global _is_running, _consumer_generation
+    _consumer_generation += 1        # stale generation stops the loop for good
     _stop_event.set()
     _is_running = False
     return {"status": "stopped"}
