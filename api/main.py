@@ -10,6 +10,7 @@ import json
 import math
 import os
 import queue
+import random
 import re
 import sys
 import threading
@@ -361,6 +362,9 @@ MAX_WINDOW_SIZE = 1000
 # summary screen. 100 is also the range the ablation script itself sweeps.
 MAX_LANDMARK_SIZE = 100
 MAX_WINDOWS = 100_000
+# Records left after a session's random start point, so it never runs dry
+# partway through.
+SESSION_HEADROOM = 5_000
 
 
 class ConsumerConfig(BaseModel):
@@ -479,7 +483,22 @@ def _run_consumer(config: ConsumerConfig, generation: int):
         }
         consumer = KafkaConsumer(kafka_conf)
         from confluent_kafka import TopicPartition, OFFSET_BEGINNING
+
+        # Start each session somewhere else in the topic. Always reading from
+        # the beginning meant every session showed the same opening records,
+        # so a second run had nothing new in it. Enough of the topic is left
+        # after the start point for a session's worth of windows.
         tp = TopicPartition(config.topic_name, 0, OFFSET_BEGINNING)
+        start_offset = OFFSET_BEGINNING
+        try:
+            low, high = consumer.get_watermark_offsets(tp, timeout=10.0)
+            headroom = config.window_size + SESSION_HEADROOM
+            if high - low > headroom:
+                start_offset = random.randrange(low, high - headroom)
+        except Exception as e:
+            print(f"[consumer] could not pick a start offset: {e}", flush=True)
+
+        tp = TopicPartition(config.topic_name, 0, start_offset)
         consumer.assign([tp])
 
         message_buffer: list = []
@@ -739,11 +758,12 @@ def _run_ablation(req: "AblationRequest") -> dict:
         floor, ceiling = bounds_from_proportions(props, req.block_size)
         attr = lambda r: str(r.get(col, ""))
 
-        # Every window of the stream and every landmark in the range, the way
-        # simulate_bfair_x_ablation.py sweeps. Sampling windows was faster but
-        # meant the fairness and latency figures described a subset of the
-        # stream rather than the stream.
-        starts = list(range(0, max(1, len(rows) - req.window_size + 1)))
+        # Reorder the way a session does. A reorder at window s with landmark
+        # x consumes the next x records, so it covers windows s..s+x and the
+        # next reorder can only start at s+x+1. Reordering at every window
+        # instead reused records that earlier reorders had already taken and
+        # reported a fairness no session could reach.
+        n_windows = max(1, len(rows) - req.window_size + 1)
         x_values = list(range(1, req.x_max + 1))
 
         points = []
@@ -751,11 +771,11 @@ def _run_ablation(req: "AblationRequest") -> dict:
             fair = blocks = 0
             elapsed = 0.0
             timed = 0
-            for s in starts:
-                window = rows[s:s + req.window_size]
-                if len(window) < req.window_size:
-                    continue
+            s = 0
+            while s < n_windows:
                 combined = rows[s:s + req.window_size + x]
+                if len(combined) < req.window_size:
+                    break
                 # Average repeated passes like the script's --runs. A single
                 # pass at these sub-millisecond durations is mostly timer
                 # noise, and which landmarks reached the pareto front changed
@@ -766,9 +786,16 @@ def _run_ablation(req: "AblationRequest") -> dict:
                     out = _bfair_reorder(combined, props, req.block_size, attr_fn=attr)
                     elapsed += (time.perf_counter() - t0) * 1000
                     timed += 1
-                shown = out[:req.window_size]
-                fair += count_fair_blocks(shown, col, floor, ceiling, req.block_size)
-                blocks += req.window_size // req.block_size
+                # the windows this one reorder is responsible for
+                for k in range(0, x + 1):
+                    if s + k >= n_windows:
+                        break
+                    shown = out[k:k + req.window_size]
+                    if len(shown) < req.window_size:
+                        break
+                    fair += count_fair_blocks(shown, col, floor, ceiling, req.block_size)
+                    blocks += req.window_size // req.block_size
+                s += x + 1
             if not blocks:
                 continue
             points.append({
@@ -799,7 +826,7 @@ def _run_ablation(req: "AblationRequest") -> dict:
         deduped.sort(key=lambda p: p["latency_ms"])
 
         return {"status": "ok", "points": points, "pareto": deduped,
-                "windows_evaluated": len(starts)}
+                "windows_evaluated": n_windows}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
