@@ -924,8 +924,11 @@ def _run_producer(dataset_name: str, topic_name: str, generation: int, loop: asy
         csv_path = resolve_csv(cfg)
         df = pd.read_csv(csv_path)
 
-        df = preprocess_for(dataset_name, cfg, df)
-
+        # Order before preprocessing, while the source column names still
+        # apply: preprocess_for renames "Date" to "DATE" and "D.O.A" to
+        # "D_O_A", so sorting afterwards silently found no date column and
+        # shuffled instead.
+        #
         # Hospital and Stocks carry real timestamps, so they stream in the
         # order the events happened. The others only have a date invented when
         # the archive was assembled, so their file order says nothing about
@@ -939,6 +942,8 @@ def _run_producer(dataset_name: str, topic_name: str, generation: int, loop: asy
             ).drop(columns=["_order"]).reset_index(drop=True)
         else:
             df = df.sample(frac=1, random_state=0).reset_index(drop=True)
+
+        df = preprocess_for(dataset_name, cfg, df)
 
         total = len(df)
 
