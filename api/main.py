@@ -47,6 +47,7 @@ BUNDLED_DATASETS = {
         "csv": "datasets/HDHI_Admission_data.csv",
         "csv_alts": ["datasets/HDHI_Admission_data_modified.csv"],
         "topic_base": "hospital",
+        "date_column": "D.O.A",
         "attributes": [
             {"label": "Gender", "column": "GENDER"},
             {"label": "Hospitalization Outcome", "column": "OUTCOME"},
@@ -56,6 +57,7 @@ BUNDLED_DATASETS = {
     "Stocks (AAPL)": {
         "csv": "datasets/AAPL_pct_change_binned.csv",
         "topic_base": "stock",
+        "date_column": "Date",
         "attributes": [
             {"label": "Price Change", "column": "PRICE_CHANGE_BIN"},
             {"label": "Volume", "column": "VOLUME_BIN"},
@@ -137,6 +139,7 @@ def _preprocess_hospital(df: pd.DataFrame) -> pd.DataFrame:
     out["MRD_NO"] = text("MRD No.")
     out["AGE"] = df["AGE"].astype(str)
     out["RURAL"] = text("RURAL").str.strip()
+    out["D_O_A"] = text("D.O.A")
     out["DURATION_OF_STAY"] = text("DURATION OF STAY")
     out["ICU_STAY"] = text("duration of intensive unit stay")
     out["ADMISSION_TYPE"] = text("TYPE OF ADMISSION-EMERGENCY/OPD").str.strip()
@@ -171,9 +174,10 @@ def _preprocess_stocks(df: pd.DataFrame) -> pd.DataFrame:
         bins=[0, 57664900, float("inf")],
         labels=["Low Volume", "High Volume"],
     ).astype(str)
+    out["DATE"] = df["Date"].astype(str)
     out["PCT_CHANGE"] = df["% Change"].astype(str)
     out["VOLUME"] = df["Volume"].astype(str)
-    out["_display_title"] = df["% Change"].astype(float).round(2).astype(str) + "% change"
+    out["_display_title"] = df["Date"].astype(str)
     return out
 
 
@@ -922,7 +926,19 @@ def _run_producer(dataset_name: str, topic_name: str, generation: int, loop: asy
 
         df = preprocess_for(dataset_name, cfg, df)
 
-        df = df.sample(frac=1, random_state=0).reset_index(drop=True)
+        # Hospital and Stocks carry real timestamps, so they stream in the
+        # order the events happened. The others only have a date invented when
+        # the archive was assembled, so their file order says nothing about
+        # arrival; shuffling makes records arrive i.i.d. from the global
+        # distribution, which is the distribution the constraints come from.
+        date_col = cfg.get("date_column") if isinstance(cfg, dict) else None
+        if date_col and date_col in df.columns:
+            order = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True)
+            df = df.assign(_order=order).sort_values(
+                "_order", kind="mergesort", na_position="last"
+            ).drop(columns=["_order"]).reset_index(drop=True)
+        else:
+            df = df.sample(frac=1, random_state=0).reset_index(drop=True)
 
         total = len(df)
 
