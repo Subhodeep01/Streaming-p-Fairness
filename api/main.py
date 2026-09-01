@@ -10,6 +10,7 @@ import json
 import math
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -136,7 +137,6 @@ def _preprocess_hospital(df: pd.DataFrame) -> pd.DataFrame:
     out["MRD_NO"] = text("MRD No.")
     out["AGE"] = df["AGE"].astype(str)
     out["RURAL"] = text("RURAL").str.strip()
-    out["D_O_A"] = text("D.O.A")
     out["DURATION_OF_STAY"] = text("DURATION OF STAY")
     out["ICU_STAY"] = text("duration of intensive unit stay")
     out["ADMISSION_TYPE"] = text("TYPE OF ADMISSION-EMERGENCY/OPD").str.strip()
@@ -171,10 +171,9 @@ def _preprocess_stocks(df: pd.DataFrame) -> pd.DataFrame:
         bins=[0, 57664900, float("inf")],
         labels=["Low Volume", "High Volume"],
     ).astype(str)
-    out["DATE"] = df["Date"].astype(str)
     out["PCT_CHANGE"] = df["% Change"].astype(str)
     out["VOLUME"] = df["Volume"].astype(str)
-    out["_display_title"] = df["Date"].astype(str)
+    out["_display_title"] = df["% Change"].astype(float).round(2).astype(str) + "% change"
     return out
 
 
@@ -186,7 +185,6 @@ def _preprocess_tweets(df: pd.DataFrame) -> pd.DataFrame:
     out["topic"] = df["topic"].astype(str).str.strip()
     out["likes"] = df["likes"].astype(str)
     out["tweet"] = df["tweet"].astype(str).str[:120]
-    out["stream_date"] = df["stream_date"].astype(str)
     out["_display_title"] = df["topic"].astype(str).str.strip()
     return out
 
@@ -201,7 +199,6 @@ def _preprocess_movies(df: pd.DataFrame) -> pd.DataFrame:
     out["avg_rating"] = df["avg_rating"].round(2).astype(str)
     out["vote_count"] = df["vote_count"].astype(str)
     out["genres"] = df["genres"].astype(str)
-    out["stream_date"] = df["stream_date"].astype(str)
     out["_display_title"] = df["title"].astype(str).str.extract(r'^(.+?)\s*\(\d{4}\)')[0].fillna(df["title"].astype(str))
     return out
 
@@ -301,6 +298,11 @@ def _preprocess_custom(df: pd.DataFrame) -> pd.DataFrame:
     for c in out.columns:
         out[c] = out[c].astype(str).str.strip()
     if len(out.columns):
+        # Whole words only. A substring test drops "sentiment", which
+        # contains "time" and is a protected attribute, not a date.
+        date_like = re.compile(r"(^|[^a-z])(date|time|timestamp|doa)([^a-z]|$)", re.I)
+        for c in [c for c in out.columns if date_like.search(str(c))]:
+            out = out.drop(columns=[c])
         out["_display_title"] = out[out.columns[0]]
     return out
 
