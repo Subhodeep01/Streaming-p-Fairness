@@ -706,7 +706,9 @@ class AblationRequest(BaseModel):
     proportions: Dict[str, float]
     attribute_column: str = "GENDER"
     x_max: int = Field(default=50, ge=1, le=MAX_LANDMARK_SIZE)
-    runs: int = Field(default=10, ge=1, le=50)
+    # One pass. Averaging repeats matters for the paper's experiments, not for
+    # a live session the user is waiting on.
+    runs: int = Field(default=1, ge=1, le=50)
 
 
 def _run_ablation(req: "AblationRequest") -> dict:
